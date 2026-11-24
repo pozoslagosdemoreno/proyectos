@@ -59,6 +59,8 @@
   function altRep(p) { return (p.alternativas || []).find(function (a) { return a.id === p.elegida; }) || (p.alternativas || [])[0] || {}; }
   function esTerminado(p) { return p.estado === 'TERMINADO'; }
   function esParcial(p) { return p.informacion === 'PARCIAL'; }
+  /** Marca de cadenamiento (también para trazas guardadas antes de la v1.1.1) */
+  function esMarca(l) { return !l.e && (l.m || (l.p && l.p.length === 2 && Number(l.l) < 30)); }
   function rangoTxt(a, b) { return n(a) == null ? '—' : (Math.round(n(a)) === Math.round(n(b)) ? fmtMoneda(a) : fmtMoneda(a) + ' – ' + fmtMoneda(b)); }
   function rangoMillones(a, b) { return Math.abs(a - b) < 1 ? fmtMillones(a) : fmtMillones(a) + ' – ' + fmtMillones(b); }
   /** Inversión estimada del proyecto: {etiqueta, html, min, max} */
@@ -279,7 +281,7 @@
             '<br>' + (inv.tipo === 'REF' ? '⚪ ' : '🟠 ') + h(inv.texto) + '<br><button class="btn chico" data-abrir="' + h(p.id) + '" style="margin-top:6px">Abrir ficha</button>';
         };
         alts.forEach(function (a) {
-          ((a.traza && a.traza.lineas) || []).filter(function (l) { return !l.e; }).forEach(function (l) {
+          ((a.traza && a.traza.lineas) || []).filter(function (l) { return !l.e && !esMarca(l); }).forEach(function (l) {
             var linea = L.polyline(l.p, { color: COLOR_SISTEMA[p.sistema] || '#555', weight: 5, opacity: p.elegida || alts.length === 1 ? 0.95 : 0.7, dashArray: esTerminado(p) ? null : '10 8' });
             linea.bindPopup(popup(a));
             capa.addLayer(linea); dibujo = true;
@@ -456,28 +458,44 @@
       '<section class="tarjeta" id="vertices"></section>';
     if (!hay) { $('#vertices').remove(); return; }
     cargarLeaflet().then(function () {
-      var m = mapaBase('mapaFicha'), capa = L.featureGroup(), ley = [], verts = [];
+      var m = mapaBase('mapaFicha'), capa = L.featureGroup(), ley = [], verts = [], hayMarcas = false, totales = [];
       var agregar = function (traza, letra, varias) {
         if (!traza) return;
+        var total = 0;
         (traza.lineas || []).forEach(function (l) {
+          if (esMarca(l)) {
+            hayMarcas = true;
+            L.polyline(l.p, { color: '#9e9e9e', weight: 2, opacity: 0.9 }).bindTooltip('Marca de cadenamiento', { sticky: true }).addTo(capa);
+            return;
+          }
+          if (!l.e) total += Number(l.l) || 0;
           var color = l.e ? (l.c || '#3a5bd9') : (letra && varias ? COLOR_OPCION[letra] : (l.c || COLOR_OPCION.A));
           L.polyline(l.p, { color: color, weight: l.e ? 3 : 5, opacity: 0.95, dashArray: l.e ? '8 6' : null })
             .bindTooltip((letra && varias ? 'Opción ' + letra + ' · ' : '') + (l.n || 'Línea') + ' · ' + fmtNum(l.l) + ' m', { sticky: true }).addTo(capa);
           var et = (l.e ? '' : (letra && varias ? 'Opción ' + letra + ': ' : '')) + (l.n || 'Línea');
           if (!ley.some(function (x) { return x.t === et; })) ley.push({ t: et, c: color, e: l.e });
-          if (!l.e) verts.push({ titulo: (letra && varias ? 'Opción ' + letra + ' · ' : '') + (l.n || 'Línea'), p: l.p });
+          if (!l.e) verts.push({ titulo: (letra && varias ? 'Opción ' + letra + ' · ' : '') + (l.n || 'Línea'), p: l.p, l: l.l });
         });
+        if (total) totales.push({ titulo: letra && varias ? 'Opción ' + letra : (letra ? 'Traza' : 'Traza común'), total: total, letra: letra });
         (traza.puntos || []).forEach(function (x) { L.circleMarker(x.p, { radius: 7, color: '#fff', weight: 2, fillColor: '#0b3954', fillOpacity: 1 }).bindTooltip(x.n || 'Punto').addTo(capa); });
       };
       agregar(p.traza, '', false);
       alts.forEach(function (a) { agregar(a.traza, a.letra, alts.length > 1); });
       capa.addTo(m);
       if (capa.getLayers().length) m.fitBounds(capa.getBounds(), { padding: [30, 30], maxZoom: 17 });
-      $('#leyFicha').innerHTML = ley.map(function (x) { return '<span><i class="' + (x.e ? 'punteada' : '') + '" style="' + (x.e ? 'border-color:' : 'background:') + x.c + '"></i>' + h(x.t) + '</span>'; }).join('');
+      $('#leyFicha').innerHTML = ley.map(function (x) { return '<span><i class="' + (x.e ? 'punteada' : '') + '" style="' + (x.e ? 'border-color:' : 'background:') + x.c + '"></i>' + h(x.t) + '</span>'; }).join('') +
+        (hayMarcas ? '<span><i style="background:#9e9e9e;height:3px"></i>Marcas de cadenamiento (no se suman)</span>' : '');
       $('#vertices').innerHTML = '<h2>Vértices (UTM, WGS84)</h2><p class="muted" style="margin-top:0">De la traza simplificada; los puntos casi alineados se omiten.</p>' + verts.map(function (v) {
         return '<h3 style="margin-top:14px">' + h(v.titulo) + '</h3><div class="tabla-caja"><table class="t" style="max-width:560px"><thead><tr><th>Vértice</th><th>X (Este)</th><th>Y (Norte)</th><th>Zona</th></tr></thead><tbody>' +
-          v.p.map(function (q, i) { var u = aUtm(q[0], q[1]); return '<tr><td class="c">' + (i + 1) + '</td><td class="c">' + fmtNum(u.x, 2) + '</td><td class="c">' + fmtNum(u.y, 2) + '</td><td class="c">' + u.zona + 'Q</td></tr>'; }).join('') + '</tbody></table></div>';
-      }).join('');
+          v.p.map(function (q, i) { var u = aUtm(q[0], q[1]); return '<tr><td class="c">' + (i + 1) + '</td><td class="c">' + fmtNum(u.x, 2) + '</td><td class="c">' + fmtNum(u.y, 2) + '</td><td class="c">' + u.zona + 'Q</td></tr>'; }).join('') + '</tbody></table></div>' +
+          '<p class="long-linea">Longitud de la línea: <b>' + fmtNum(v.l) + ' m</b></p>';
+      }).join('') +
+        (totales.length ? '<div class="long-total">' + totales.map(function (t) {
+          var alt = t.letra ? alts.find(function (a) { return a.letra === t.letra; }) : null;
+          var doc = alt && n(alt.longitud);
+          return '<div><b>Longitud total medida en la traza' + (totales.length > 1 || alts.length > 1 ? ' · ' + h(t.titulo) : '') + ': ' + fmtNum(t.total) + ' m</b>' +
+            (doc ? '<span class="muted"> · Longitud del documento: ' + fmtNum(doc) + ' m' + (Math.abs(doc - t.total) > Math.max(5, doc * 0.02) ? ' (diferencia de ' + fmtNum(Math.abs(doc - t.total)) + ' m)' : '') + '</span>' : '') + '</div>';
+        }).join('') + '<p class="muted" style="margin:6px 0 0">Distancia real sobre el terreno, sin líneas existentes ni marcas de cadenamiento.</p></div>' : '');
     }).catch(fallo);
   }
 
