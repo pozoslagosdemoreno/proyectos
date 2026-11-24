@@ -6,7 +6,11 @@
   'use strict';
   var CDN = {
     leafletCss: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-    leafletJs: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+    leafletJs: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+    pdfjs: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+    pdfjsWorker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+    xlsx: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    jszip: 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'
   };
   var CENTRO = [21.356, -101.93];
   var COLOR_SISTEMA = { 'AGUA POTABLE': '#1f6fb5', 'ALCANTARILLADO': '#8a5a2b' };
@@ -15,7 +19,7 @@
 
   var E = {
     token: leer('pr_token'), usuario: null, cat: null, vista: 'inicio', ficha: null, tab: 'resumen',
-    filtros: { sistema: '', estado: '', q: '', cancelados: false }, videos: null, videoSel: '', mapas: {}
+    filtros: { sistema: '', estado: '', q: '', cancelados: false, info: '' }, videos: null, videoSel: '', mapas: {}
   };
 
   // ===================== UTILIDADES =====================
@@ -54,6 +58,24 @@
   /** Opción que representa al proyecto en indicadores: la elegida o, si no hay, la primera */
   function altRep(p) { return (p.alternativas || []).find(function (a) { return a.id === p.elegida; }) || (p.alternativas || [])[0] || {}; }
   function esTerminado(p) { return p.estado === 'TERMINADO'; }
+  function esParcial(p) { return p.informacion === 'PARCIAL'; }
+  function rangoTxt(a, b) { return n(a) == null ? '—' : (Math.round(n(a)) === Math.round(n(b)) ? fmtMoneda(a) : fmtMoneda(a) + ' – ' + fmtMoneda(b)); }
+  function rangoMillones(a, b) { return Math.abs(a - b) < 1 ? fmtMillones(a) : fmtMillones(a) + ' – ' + fmtMillones(b); }
+  /** Inversión estimada del proyecto: {etiqueta, html, min, max} */
+  function inversion(p) {
+    var a = altRep(p);
+    if (esParcial(p)) return { tipo: 'REF', min: n(a.estMinTotal) || 0, max: n(a.estMaxTotal) || 0, texto: rangoTxt(a.estMinTotal, a.estMaxTotal) };
+    return { tipo: 'PAR', min: n(a.total) || 0, max: n(a.total) || 0, texto: fmtMoneda(a.total) };
+  }
+  function chipInv(tipo) {
+    return tipo === 'REF' ? '<span class="chip inv-ref" title="Estimado de referencia con datos parciales">⚪ Referencia — datos parciales</span>'
+      : '<span class="chip inv-par" title="Estimado paramétrico del departamento">🟠 Estimado paramétrico</span>';
+  }
+  function avisoGeneral() { return '<p class="aviso-general">' + h((E.cat && E.cat.textos && E.cat.textos.aviso) || '') + '</p>'; }
+  function coloniaDe(nombre) {
+    var q = norm(nombre).trim(); if (!q || !E.cat || !E.cat.colonias) return null;
+    return E.cat.colonias.find(function (c) { return norm(c.n).trim() === q; }) || E.cat.colonias.find(function (c) { var t = norm(c.n); return t.indexOf(q) !== -1 || q.indexOf(t) !== -1; }) || null;
+  }
 
   var OJO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var OJO_NO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.8 10.8 0 0 1 12 19c-7 0-11-7-11-7a19.8 19.8 0 0 1 5.1-5.9M9.9 4.2A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a19.9 19.9 0 0 1-2.2 3.3M14.1 14.1a3 3 0 1 1-4.2-4.2"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
@@ -163,7 +185,7 @@
   function marco(contenido) {
     var u = E.usuario || {};
     var nav = [['inicio', 'Inicio'], ['nuevos', 'Proyectos nuevos'], ['terminados', 'Proyectos terminados'], ['videos', 'Videos']];
-    if (esAdmin()) nav.push(['usuarios', 'Usuarios']);
+    if (esAdmin()) { nav.push(['precios', 'Precios']); nav.push(['usuarios', 'Usuarios']); }
     var activa = E.vista === 'ficha' ? (E.ficha && esTerminado(E.ficha) ? 'terminados' : 'nuevos') : E.vista;
     Object.keys(E.mapas).forEach(function (k) { try { E.mapas[k].remove(); } catch (e) {} delete E.mapas[k]; });
     $('#app').innerHTML = '<header class="enc"><div class="enc-marca"><img src="logo.jpg" alt=""><div class="enc-tit"><b>AGUA POTABLE Y ALCANTARILLADO</b><span>CARTERA DE PROYECTOS</span></div></div>' +
@@ -183,6 +205,7 @@
     if (vista === 'terminados') return vistaLista(true);
     if (vista === 'videos') return vistaVideos();
     if (vista === 'usuarios') return vistaUsuarios();
+    if (vista === 'precios') return vistaPrecios();
   }
 
   // ===================== FILTROS =====================
@@ -191,6 +214,7 @@
     return lista.filter(function (p) {
       if (f.sistema && p.sistema !== f.sistema) return false;
       if (f.estado && p.estado !== f.estado) return false;
+      if (f.info && (p.informacion || 'COMPLETA') !== f.info) return false;
       if (q) { var t = norm([p.id, p.clave, p.nombre, p.colonia, p.calles, p.diametro].join(' ')); if (!q.split(/\s+/).every(function (w) { return t.indexOf(w) !== -1; })) return false; }
       return true;
     });
@@ -207,6 +231,7 @@
     if ($('#fSis')) $('#fSis').onchange = function () { E.filtros.sistema = this.value; repintar(); };
     if ($('#fEst')) $('#fEst').onchange = function () { E.filtros.estado = this.value; repintar(); };
     if ($('#fCan')) $('#fCan').onchange = function () { E.filtros.cancelados = this.checked; repintar(); };
+    if ($('#fInf')) $('#fInf').onchange = function () { E.filtros.info = this.value; repintar(); };
     if ($('#fQ')) $('#fQ').oninput = function () { var v = this.value; clearTimeout(enlazarFiltros.t); enlazarFiltros.t = setTimeout(function () { E.filtros.q = v; repintar(true); }, 300); };
   }
 
@@ -214,22 +239,26 @@
   function vistaInicio() {
     var ps = E.cat.proyectos;
     var nuevos = ps.filter(function (p) { return !esTerminado(p) && p.estado !== 'CANCELADO'; }), term = ps.filter(esTerminado);
+    var termC = term.filter(function (p) { return !esParcial(p); }), termP = term.filter(esParcial);
     var suma = function (l, fn) { return l.reduce(function (a, p) { return a + (n(fn(p)) || 0); }, 0); };
     var kmN = suma(nuevos, function (p) { return altRep(p).longitud; }) / 1000, kmT = suma(term, function (p) { return altRep(p).longitud; }) / 1000;
-    var invN = suma(nuevos, function (p) { return altRep(p).total; }), invT = suma(term, function (p) { return n(p.montoEjercido) != null ? p.montoEjercido : altRep(p).total; });
-    var pobT = suma(term, function (p) { return altRep(p).poblacion; }), pobN = suma(nuevos, function (p) { return altRep(p).poblacion; });
+    var invN = suma(nuevos, function (p) { return altRep(p).total; }), invT = suma(termC, function (p) { return altRep(p).total; });
+    var refMin = suma(termP, function (p) { return altRep(p).estMinTotal; }), refMax = suma(termP, function (p) { return altRep(p).estMaxTotal; });
     var porSis = function (l, s) { return l.filter(function (p) { return p.sistema === s; }).length; };
-    marco('<section class="grid4">' +
+    marco('<section class="grid3">' +
       kpi('Proyectos nuevos', nuevos.length, porSis(nuevos, 'AGUA POTABLE') + ' agua potable · ' + porSis(nuevos, 'ALCANTARILLADO') + ' alcantarillado') +
-      kpi('Proyectos terminados', term.length, porSis(term, 'AGUA POTABLE') + ' agua potable · ' + porSis(term, 'ALCANTARILLADO') + ' alcantarillado') +
+      kpi('Obras terminadas', term.length, termC.length + ' con información completa · ' + termP.length + ' con datos parciales') +
       kpi('Km propuestos / construidos', fmtNum(kmN, 2) + ' / ' + fmtNum(kmT, 2), 'Longitud de la opción elegida (o la A)') +
-      kpi('Inversión propuesta / ejercida', fmtMillones(invN) + ' / ' + fmtMillones(invT), 'Con IVA · población: ' + fmtNum(pobN) + ' / ' + fmtNum(pobT) + ' hab.') +
-      '</section>' +
+      '</section><section class="grid3">' +
+      kpi('Inversión estimada — proyectos nuevos', fmtMillones(invN), '🟠 Estimado paramétrico, con IVA') +
+      kpi('Inversión estimada — obras terminadas', fmtMillones(invT), '🟠 Estimado paramétrico, con IVA') +
+      kpi('Inversión de referencia — datos parciales', termP.length ? rangoMillones(refMin, refMax) : '—', '⚪ Rango con IVA') +
+      '</section><p class="muted" style="margin:-6px 0 0">Estimaciones de preinversión; no son montos contratados ni ejercidos. Las cifras de cada tipo no se suman entre sí.</p>' +
       barraFiltros('todos') +
       '<section class="tarjeta" style="padding:0;overflow:hidden"><div id="mapaInicio" class="mapa grande"></div>' +
       '<div class="leyenda"><span><i style="background:' + COLOR_SISTEMA['AGUA POTABLE'] + '"></i>Agua potable</span><span><i style="background:' + COLOR_SISTEMA.ALCANTARILLADO + '"></i>Alcantarillado</span>' +
-      '<span><i class="punteada"></i>Nuevo (punteado)</span><span><i class="continua"></i>Terminado (continuo)</span><span class="muted">Toca una línea para ver el proyecto.</span></div></section>' +
-      '<div id="sinTraza"></div>');
+      '<span><i class="punteada"></i>Nuevo (punteado)</span><span><i class="continua"></i>Terminado (continuo)</span><span><b class="pt"></b>Obra sin traza (centro de su colonia)</span><span class="muted">Toca una línea o punto para ver el proyecto.</span></div></section>' +
+      '<div id="sinTraza"></div>' + avisoGeneral());
     enlazarFiltros(function (soloTexto) { if (soloTexto) pintarMapaInicio(); else vistaInicio(); });
     pintarMapaInicio();
   }
@@ -244,19 +273,27 @@
       var capa = L.featureGroup(), sin = [];
       lista.forEach(function (p) {
         var alts = p.elegida ? p.alternativas.filter(function (a) { return a.id === p.elegida; }) : p.alternativas;
-        var dibujo = false;
+        var dibujo = false, inv = inversion(p);
+        var popup = function (a) {
+          return '<b>' + h(p.nombre) + '</b><br>' + h(p.id) + (a && alts.length > 1 ? ' · Opción ' + a.letra : '') + '<br>' + h(p.estado) + (a ? ' · ' + fmtNum(a.longitud || a.longitudTraza) + ' m' : '') +
+            '<br>' + (inv.tipo === 'REF' ? '⚪ ' : '🟠 ') + h(inv.texto) + '<br><button class="btn chico" data-abrir="' + h(p.id) + '" style="margin-top:6px">Abrir ficha</button>';
+        };
         alts.forEach(function (a) {
           ((a.traza && a.traza.lineas) || []).filter(function (l) { return !l.e; }).forEach(function (l) {
             var linea = L.polyline(l.p, { color: COLOR_SISTEMA[p.sistema] || '#555', weight: 5, opacity: p.elegida || alts.length === 1 ? 0.95 : 0.7, dashArray: esTerminado(p) ? null : '10 8' });
-            linea.bindPopup('<b>' + h(p.nombre) + '</b><br>' + h(p.id) + (alts.length > 1 ? ' · Opción ' + a.letra : '') + '<br>' + h(p.estado) + ' · ' + fmtNum(a.longitud || a.longitudTraza) + ' m<br><button class="btn chico" data-abrir="' + h(p.id) + '" style="margin-top:6px">Abrir ficha</button>');
+            linea.bindPopup(popup(a));
             capa.addLayer(linea); dibujo = true;
           });
         });
+        if (!dibujo && esParcial(p)) {
+          var c = coloniaDe(p.colonia);
+          if (c) { L.circleMarker([c.lat, c.lng], { radius: 8, color: '#fff', weight: 2, fillColor: COLOR_SISTEMA[p.sistema] || '#555', fillOpacity: 0.95 }).bindPopup(popup(altRep(p))).addTo(capa); dibujo = true; }
+        }
         if (!dibujo) sin.push(p);
       });
       capa.addTo(m); m._capaProy = capa;
       if (capa.getLayers().length) m.fitBounds(capa.getBounds(), { padding: [30, 30], maxZoom: 16 });
-      $('#sinTraza').innerHTML = sin.length ? '<section class="tarjeta"><h3>Proyectos sin traza cargada (' + sin.length + ')</h3><p class="muted">Deja el KMZ en su carpeta de Drive y usa "Actualizar archivos" en la ficha.</p><div class="fila">' +
+      $('#sinTraza').innerHTML = sin.length ? '<section class="tarjeta"><h3>Sin ubicación en el mapa (' + sin.length + ')</h3><p class="muted">Proyectos sin traza cargada u obras con datos parciales sin colonia reconocida. Para la traza, deja el KMZ en su carpeta de Drive y usa "Actualizar archivos" en la ficha.</p><div class="fila">' +
         sin.map(function (p) { return '<button class="btn chico" data-abrir="' + h(p.id) + '">' + h(p.id) + ' · ' + h(p.nombre) + '</button>'; }).join('') + '</div></section>' : '';
       enlazarAbrir();
     }).catch(fallo);
@@ -281,34 +318,43 @@
   // ===================== LISTAS (NUEVOS / TERMINADOS) =====================
   function vistaLista(terminados) {
     var titulo = terminados ? 'Proyectos terminados' : 'Proyectos nuevos';
-    var pintar = function (soloTexto) {
+    var pintar = function () {
       var lista = filtrar(E.cat.proyectos).filter(function (p) { return terminados ? esTerminado(p) : (!esTerminado(p) && (p.estado !== 'CANCELADO' || E.filtros.cancelados || E.filtros.estado === 'CANCELADO')); });
       lista.sort(function (a, b) { return a.id.localeCompare(b.id); });
       $('#lista').innerHTML = lista.length ? lista.map(tarjetaProyecto).join('') : '<div class="tarjeta muted">No hay proyectos con estos filtros.</div>';
       $('#cuenta').textContent = lista.length + ' proyecto(s)';
       enlazarAbrir();
-      if (!soloTexto) return;
     };
     var puedeCrear = esAdmin() || rol() === 'PROYECTISTA';
-    marco('<section class="fila entre"><div><h1 class="titulo">' + titulo + '</h1><span class="muted" id="cuenta"></span></div>' +
-      ((terminados ? esAdmin() : puedeCrear) ? '<button class="btn pri" id="bNuevo">+ ' + (terminados ? 'Registrar proyecto terminado' : 'Nuevo proyecto') + '</button>' : '') + '</section>' +
-      barraFiltros(terminados ? false : 'nuevos', terminados ? '' : '<label class="fila" style="gap:8px;align-self:flex-end;min-height:44px"><input type="checkbox" id="fCan"' + (E.filtros.cancelados ? ' checked' : '') + '> Ver cancelados</label>') +
-      '<section class="tarjetas" id="lista"></section>');
+    if (!terminados && E.filtros.info) E.filtros.info = '';
+    var botones = terminados
+      ? (esAdmin() ? '<div class="fila"><button class="btn" id="bParcial">+ Registrar obra con datos parciales</button><button class="btn pri" id="bNuevo">+ Registrar proyecto terminado</button></div>' : '')
+      : (puedeCrear ? '<button class="btn pri" id="bNuevo">+ Nuevo proyecto</button>' : '');
+    var extra = terminados
+      ? '<label class="col"><span class="etq">INFORMACIÓN</span><select id="fInf"><option value="">Todas</option><option value="COMPLETA"' + (E.filtros.info === 'COMPLETA' ? ' selected' : '') + '>Completa (documentos)</option><option value="PARCIAL"' + (E.filtros.info === 'PARCIAL' ? ' selected' : '') + '>Datos parciales</option></select></label>'
+      : '<label class="fila" style="gap:8px;align-self:flex-end;min-height:44px"><input type="checkbox" id="fCan"' + (E.filtros.cancelados ? ' checked' : '') + '> Ver cancelados</label>';
+    marco('<section class="fila entre"><div><h1 class="titulo">' + titulo + '</h1><span class="muted" id="cuenta"></span></div>' + botones + '</section>' +
+      barraFiltros(terminados ? false : 'nuevos', extra) +
+      '<section class="tarjetas" id="lista"></section>' + avisoGeneral());
     if ($('#bNuevo')) $('#bNuevo').onclick = function () { formProyecto(null, terminados); };
+    if ($('#bParcial')) $('#bParcial').onclick = function () { formObraParcial(null); };
     enlazarFiltros(pintar);
     pintar();
   }
 
   function tarjetaProyecto(p) {
-    var alts = p.alternativas || [];
+    var alts = p.alternativas || [], inv = inversion(p);
+    var cuerpo = esParcial(p)
+      ? '<table class="mini"><tbody><tr><td>Longitud</td><td colspan="2">' + fmtNum(altRep(p).longitud) + ' m</td></tr><tr><td>Inversión estimada</td><td colspan="2">' + h(inv.texto) + '</td></tr></tbody></table>'
+      : '<table class="mini"><tbody>' + alts.map(function (a) {
+        return '<tr><td>' + (alts.length > 1 ? '<i class="punto" style="background:' + COLOR_OPCION[a.letra] + '"></i>Opción ' + h(a.letra) + (p.elegida === a.id ? ' <b class="ok-txt">✓</b>' : '') : 'Inversión estimada') + '</td><td>' + fmtNum(a.longitud) + ' m</td><td>' + fmtMoneda(a.total) + '</td></tr>';
+      }).join('') + '</tbody></table>';
     return '<article class="tarjeta proy" data-abrir="' + h(p.id) + '" tabindex="0" role="button" aria-label="Abrir ' + h(p.nombre) + '">' +
       '<div class="fila entre" style="gap:6px"><span class="clave-p">' + h(p.id) + (p.clave ? ' · ' + h(p.clave) : '') + '</span>' + chipEstado(p.estado) + '</div>' +
       '<h3>' + h(p.nombre) + '</h3>' +
       '<div class="fila" style="gap:6px">' + chipSistema(p.sistema) + (p.diametro ? '<span class="chip gris">Ø ' + h(p.diametro) + '"</span>' : '') + (p.colonia ? '<span class="muted">' + h(p.colonia) + '</span>' : '') + '</div>' +
-      '<table class="mini"><tbody>' + alts.map(function (a) {
-        return '<tr><td>' + (alts.length > 1 ? '<i class="punto" style="background:' + COLOR_OPCION[a.letra] + '"></i>Opción ' + h(a.letra) + (p.elegida === a.id ? ' <b class="ok-txt">✓</b>' : '') : 'Datos') + '</td><td>' + fmtNum(a.longitud) + ' m</td><td>' + fmtMoneda(a.total) + '</td></tr>';
-      }).join('') + '</tbody></table>' +
-      '<div class="muted">' + p.nDocs + ' documento(s) · ' + p.nVideos + ' video(s)' + (esTerminado(p) && p.termino ? ' · Terminado ' + fmtFecha(p.termino) : '') + '</div></article>';
+      cuerpo + '<div>' + chipInv(inv.tipo) + '</div>' +
+      '<div class="muted">' + p.nDocs + ' documento(s) · ' + p.nVideos + ' video(s)' + (esParcial(p) && p.anio ? ' · Año ' + h(p.anio) : '') + (esTerminado(p) && p.termino ? ' · Terminado ' + fmtFecha(p.termino) : '') + '</div></article>';
   }
 
   // ===================== FICHA =====================
@@ -331,9 +377,9 @@
       '<h1 class="titulo" style="margin:8px 0 0">' + h(p.nombre) + '</h1></section>' +
       '<div class="tabs" role="tablist">' + tabs.map(function (t) { return '<button role="tab" data-tab="' + t[0] + '" class="' + (E.tab === t[0] ? 'activo' : '') + '">' + h(t[1]) + '</button>'; }).join('') + '</div>' +
       '<label class="tabs-movil col"><span class="etq">SECCIÓN</span><select id="fTabM">' + tabs.map(function (t) { return '<option value="' + t[0] + '"' + (E.tab === t[0] ? ' selected' : '') + '>' + h(t[1]) + '</option>'; }).join('') + '</select></label>' +
-      '<div id="fCont"></div>');
+      '<div id="fCont"></div>' + avisoGeneral());
     $('#fVolver').onclick = function () { ir(esTerminado(p) ? 'terminados' : 'nuevos'); };
-    if ($('#fEditar')) $('#fEditar').onclick = function () { formProyecto(p); };
+    if ($('#fEditar')) $('#fEditar').onclick = function () { if (esParcial(p)) formObraParcial(p); else formProyecto(p); };
     if ($('#fEstado')) $('#fEstado').onclick = function () { formEstado(p); };
     $$('[data-tab]').forEach(function (b) { b.onclick = function () { E.tab = b.getAttribute('data-tab'); pintarFicha(); }; });
     $('#fTabM').onchange = function () { E.tab = this.value; pintarFicha(); };
@@ -344,6 +390,7 @@
 
   function tabResumen() {
     var p = E.ficha, alts = p.alternativas, editar = puedeEditar(p), term = esTerminado(p);
+    if (esParcial(p)) return tabResumenParcial();
     var html = '<section class="tarjeta"><h2>Ficha técnica</h2><div class="datos">' +
       dato('Tipo de obra', h(p.tipoObra)) + dato('Diámetro', p.diametro ? h(p.diametro) + ' pulg' : '') + dato('Material', h(p.material)) +
       dato('Colonia', h(p.colonia)) + dato('Calles', h(p.calles)) + dato('Fuente de financiamiento', h(p.fuente)) +
@@ -363,13 +410,13 @@
       ['E · Hincado de tubería', function (a) { return fmtMoneda(a.subE); }],
       ['Subtotal sin IVA', function (a) { return fmtMoneda(a.sinIva); }],
       ['IVA 16%', function (a) { return fmtMoneda(a.iva); }],
-      ['Inversión total (con IVA)', function (a) { return '<b>' + fmtMoneda(a.total) + '</b>'; }],
+      ['Inversión estimada total (con IVA)', function (a) { return '<b>' + fmtMoneda(a.total) + '</b>'; }],
       ['Duración de obra', function (a) { return a.duracion ? fmtNum(a.duracion) + ' días hábiles' : '—'; }]
     ];
     var marca = function (a) { return p.elegida === a.id ? '<span class="chip ok">' + (term ? 'Construida' : 'Elegida') + '</span>' : ''; };
     html += '<section class="tarjeta"><div class="fila entre"><h2 style="margin:0">' + (alts.length > 1 ? 'Comparación de opciones de trazo' : 'Datos del proyecto') + '</h2>' +
       (editar ? '<button class="btn chico" id="bAddAlt">+ Agregar opción</button>' : '') + '</div>' +
-      (term ? '<p class="muted" style="margin:6px 0 0">Fuente: resumen ejecutivo.</p>' : '') +
+      '<div class="fila" style="margin-top:8px;gap:8px">' + chipInv('PAR') + '<span class="muted">Inversión estimada según los documentos entregados' + (term ? ' (resumen ejecutivo)' : '') + '.</span></div>' +
       '<div class="tabla-caja" style="margin-top:10px"><table class="t comp"><thead><tr><th style="text-align:left">Concepto</th>' +
       alts.map(function (a) { return '<th>' + (alts.length > 1 ? '<i class="punto" style="background:' + COLOR_OPCION[a.letra] + '"></i>Opción ' + h(a.letra) : 'Valor') + ' ' + marca(a) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       filas.map(function (f) { return '<tr><td>' + h(f[0]) + '</td>' + alts.map(function (a) { return '<td class="c">' + f[1](a) + '</td>'; }).join('') + '</tr>'; }).join('') +
@@ -558,6 +605,7 @@
     var campo = function (id, etq, val, extra) { return '<label class="col"><span class="etq">' + etq + '</span><input type="number" step="0.01" id="' + id + '" value="' + h(val || '') + '" ' + (extra || '') + '></label>'; };
     abrirModal('<h2 style="margin:0">' + (nueva ? 'Agregar opción' : (p.alternativas.length > 1 ? 'Opción ' + h(a.letra) : 'Datos del proyecto')) + ' · ' + h(p.id) + '</h2>' +
       (esTerminado(p) ? '<p class="muted" style="margin:0">Captura los datos tal como vienen en el resumen ejecutivo.</p>' : '') +
+      (!nueva ? '<div class="fila"><button class="btn" type="button" id="aLeer">📄 Leer datos de los documentos</button><span class="muted">Llena el formulario con el resumen ejecutivo, el presupuesto o la memoria registrados. Revisa antes de guardar.</span></div><div id="aLeido"></div>' : '') +
       '<label class="col"><span class="etq">DESCRIPCIÓN DEL TRAZO</span><input type="text" id="aDes" value="' + h(a.descripcion || '') + '" placeholder="Por dónde va esta opción"></label>' +
       '<div class="grid3">' + campo('aLon', 'LONGITUD (M)', a.longitud) + campo('aPob', 'POBLACIÓN BENEFICIADA', a.poblacion, 'step="1"') + campo('aDur', 'DURACIÓN (DÍAS HÁBILES)', a.duracion, 'step="1"') + '</div>' +
       '<fieldset class="caja"><legend class="etq">INVERSIÓN ($ M.N.)</legend><div class="grid3">' +
@@ -577,6 +625,28 @@
       if (!s) return aviso('Captura primero los subtotales A–E.');
       var iva = Math.round(s * 16) / 100;
       $('#aSin').value = s.toFixed(2); $('#aIva').value = iva.toFixed(2); $('#aTot').value = (s + iva).toFixed(2); cuadre();
+    };
+    if ($('#aLeer')) $('#aLeer').onclick = function () {
+      var b = this; b.disabled = true; b.textContent = 'Leyendo documentos…';
+      leerDocumentos(p, a).then(function (c) {
+        b.disabled = false; b.textContent = '📄 Volver a leer';
+        var mapa = { longitud: 'aLon', poblacion: 'aPob', duracion: 'aDur', subA: 'aSA', subB: 'aSB', subC: 'aSC', subD: 'aSD', subE: 'aSE', sinIva: 'aSin', iva: 'aIva', total: 'aTot' };
+        var filas = [];
+        Object.keys(mapa).forEach(function (k) {
+          var v = c.valores[k]; if (!v) return;
+          var inp = $('#' + mapa[k]); inp.value = v.valor; inp.classList.add('leido'); inp.title = 'Leído de ' + v.fuente;
+          filas.push('<tr><td>' + h(window.Extraccion.ETIQUETAS[k]) + '</td><td class="c">' + h(typeof v.valor === 'number' ? fmtNum(v.valor, k === 'longitud' || k.indexOf('sub') === 0 || k === 'sinIva' || k === 'iva' || k === 'total' ? 2 : 0) : v.valor) + '</td><td>' + h(v.fuente) + '</td></tr>');
+        });
+        var sug = [];
+        if (c.valores.diametro && String(c.valores.diametro.valor) !== String(p.diametro || '')) sug.push('Diámetro en documentos: ' + c.valores.diametro.valor + '" (ficha: ' + (p.diametro || '—') + ')');
+        if (c.valores.material && norm(c.valores.material.valor) !== norm(p.material || '')) sug.push('Material en documentos: ' + c.valores.material.valor + ' (ficha: ' + (p.material || '—') + ')');
+        cuadre();
+        $('#aLeido').innerHTML = '<div class="leido-caja">' +
+          (filas.length ? '<b>Datos encontrados (' + filas.length + ')</b><div class="tabla-caja"><table class="t"><thead><tr><th style="text-align:left">Dato</th><th>Valor</th><th style="text-align:left">Archivo</th></tr></thead><tbody>' + filas.join('') + '</tbody></table></div>' : '<b>No se encontraron datos en los documentos.</b>') +
+          (c.avisos.length ? '<div class="avisos-lect"><b>Diferencias entre documentos</b><ul>' + c.avisos.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') +
+          (sug.length ? '<div class="avisos-lect"><b>Datos del proyecto</b> (se corrigen con "Editar datos")<ul>' + sug.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') +
+          '<p class="muted" style="margin:6px 0 0">Archivos revisados: ' + c.leidos.map(function (x) { return h(x.nombre) + (x.error ? ' (no se pudo leer: ' + h(x.error) + ')' : ' (' + x.n + ' dato[s])'); }).join(' · ') + '. Prioridad: resumen ejecutivo → presupuesto PDF → presupuesto Excel → memoria.</p></div>';
+      }).catch(function (e) { b.disabled = false; b.textContent = '📄 Leer datos de los documentos'; fallo(e); });
     };
     $('#aX').onclick = cerrarModal;
     $('#aOk').onclick = function () {
@@ -691,6 +761,162 @@
         };
       });
     }).catch(fallo);
+  }
+
+  // ===================== OBRAS CON DATOS PARCIALES =====================
+  function tablaLineas(lineas) {
+    return '<div class="tabla-caja"><table class="t"><thead><tr><th style="text-align:left">Concepto</th><th>Clave</th><th>Unidad</th><th>Cantidad</th><th>P.U.</th><th>Importe</th></tr></thead><tbody>' +
+      lineas.map(function (l) { return '<tr><td>' + h(l.concepto) + '</td><td class="c">' + h(l.clave || '') + '</td><td class="c">' + h(l.unidad) + '</td><td class="c">' + fmtNum(l.cantidad, 2) + '</td><td class="c">' + fmtMoneda(l.pu) + '</td><td class="c">' + fmtMoneda(l.importe) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>';
+  }
+
+  function tabResumenParcial() {
+    var p = E.ficha, a = p.alternativas[0] || {}, det = a.estDetalle || {}, iva = 0.16;
+    var desactualizada = esAdmin() && a.estVersion && p.versionPrecios && String(a.estVersion) !== String(p.versionPrecios);
+    var mismo = Math.round(n(a.estMinTotal)) === Math.round(n(a.estMaxTotal));
+    var html = '<section class="tarjeta"><h2>Datos de la obra</h2><div class="datos">' +
+      dato('Sistema', h(p.sistema)) + dato('Diámetro', p.diametro ? h(p.diametro) + ' pulg' : '') + dato('Longitud', fmtNum(a.longitud) + ' m') +
+      dato('Año de la obra', h(p.anio)) + dato('Colonia', h(p.colonia)) + dato('Calles', h(p.calles)) +
+      dato('Superficie', h(String(a.superficie || 'DESCONOCIDA').toLowerCase())) + dato('¿Se cuenta con la traza?', a.tieneTraza ? 'Sí' : 'No') +
+      (n(a.hincado) ? dato('Hincado', fmtNum(a.hincado) + ' m') : '') + '</div>' +
+      (p.obs ? '<p style="margin:12px 0 0;white-space:pre-wrap">' + h(p.obs) + '</p>' : '') + '</section>' +
+      '<section class="tarjeta inv-bloque"><div class="fila entre"><h2 style="margin:0">Inversión estimada</h2>' + chipInv('REF') + '</div>' +
+      '<div class="inv-cifra">' + h(rangoTxt(a.estMinTotal, a.estMaxTotal)) + ' <span class="muted">con IVA</span></div>' +
+      '<p class="muted" style="margin:0">' + (mismo ? 'Sin IVA: ' + fmtMoneda(a.estMin) : 'Sin IVA: ' + fmtMoneda(a.estMin) + ' – ' + fmtMoneda(a.estMax)) + ' · Calculado con catálogo CEA Jalisco 2022 + 23 % · ' +
+      (a.superficie === 'DESCONOCIDA' || !a.superficie ? 'superficie desconocida' : 'superficie: ' + h(String(a.superficie).toLowerCase())) + ' · ' + (a.tieneTraza ? 'con traza' : 'sin traza: incluye ' + h(a.pctPiezas || 3) + ' % de piezas especiales') + '</p>' +
+      '<p class="leyenda-doc">' + h(E.cat.textos.leyenda) + '</p>' +
+      (det.lineasMin ? '<details class="como"><summary>¿Cómo se calculó?</summary><ul>' + (det.supuestos || []).map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul>' +
+        '<h3>' + (mismo ? 'Conceptos' : 'Mínimo (' + h(String(det.supMin || '').toLowerCase()) + ')') + '</h3>' + tablaLineas(det.lineasMin) +
+        (mismo ? '' : '<h3 style="margin-top:12px">Máximo (' + h(String(det.supMax || '').toLowerCase()) + ')</h3>' + tablaLineas(det.lineasMax)) +
+        '<p class="muted">Calculado el ' + h(a.estFecha || '') + ' con la versión ' + h(a.estVersion || '') + ' de la tabla de precios.</p></details>' : '') +
+      (desactualizada ? '<div class="fila" style="margin-top:10px"><span class="chip warn">La tabla de precios cambió (versión ' + h(a.estVersion) + ' → ' + h(p.versionPrecios) + ')</span><button class="btn chico" id="bRecalc">Recalcular con precios vigentes</button></div>' : '') +
+      '</section>';
+    if (esAdmin()) html += '<section class="fila" style="justify-content:flex-end"><button class="btn chico peligro" id="bDelProy">Eliminar obra</button></section>';
+    $('#fCont').innerHTML = html;
+    if ($('#bRecalc')) $('#bRecalc').onclick = function () { api('recalcularEstimacion', p.id).then(function (r) { if (resultado(r, 'Recalculado.')) recargarFicha(); }).catch(fallo); };
+    if ($('#bDelProy')) $('#bDelProy').onclick = function () {
+      var conf = prompt('Esto quita la obra de la app y manda su carpeta a la papelera de Drive.\n\nPara confirmar, escribe la clave: ' + p.id);
+      if (conf == null) return;
+      api('eliminarProyecto', p.id, conf).then(function (r) { if (resultado(r, 'Obra eliminada.')) recargarCatalogo().then(function () { ir('terminados'); }); }).catch(fallo);
+    };
+  }
+
+  function formObraParcial(p) {
+    var L = E.cat.listas, nueva = !p, a = p ? (p.alternativas[0] || {}) : {};
+    p = p || {};
+    var dia = function (sis, sel) { return (L.diametros[sis] || []).map(function (d) { return '<option value="' + d + '"' + (String(sel) === String(d) ? ' selected' : '') + '>' + d + '"</option>'; }).join(''); };
+    var sis0 = p.sistema || 'AGUA POTABLE';
+    abrirModal('<h2 style="margin:0">' + (nueva ? 'Registrar obra con datos parciales' : 'Editar obra ' + h(p.id)) + '</h2>' +
+      '<p class="muted" style="margin:0">Para obras terminadas de las que solo se conoce sistema, diámetro, longitud y año. La app calcula un rango de referencia con la tabla de precios vigente.</p>' +
+      '<div class="grid2">' +
+      '<label class="col"><span class="etq">SISTEMA *</span><select id="oSis"' + (nueva ? '' : ' disabled') + '>' + L.sistemas.map(function (x) { return '<option' + (x === sis0 ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
+      '<label class="col"><span class="etq">DIÁMETRO *</span><select id="oDia">' + dia(sis0, p.diametro) + '</select></label>' +
+      '<label class="col"><span class="etq">LONGITUD (M) *</span><input type="number" id="oLon" min="1" step="0.01" value="' + h(a.longitud || '') + '"></label>' +
+      '<label class="col"><span class="etq">AÑO DE LA OBRA</span><input type="number" id="oAnio" min="1990" max="2100" value="' + h(p.anio || '') + '"></label>' +
+      '<label class="col"><span class="etq">COLONIA</span><input type="text" id="oCol" list="dlCol" value="' + h(p.colonia || '') + '"><datalist id="dlCol">' + (E.cat.colonias || []).map(function (c) { return '<option value="' + h(c.n) + '">'; }).join('') + '</datalist></label>' +
+      '<label class="col"><span class="etq">CALLES / TRAMO</span><input type="text" id="oCal" value="' + h(p.calles || '') + '"></label>' +
+      '<label class="col"><span class="etq">SUPERFICIE PREDOMINANTE</span><select id="oSup">' + L.superficies.map(function (x) { return '<option value="' + x + '"' + ((a.superficie || 'DESCONOCIDA') === x ? ' selected' : '') + '>' + (x === 'DESCONOCIDA' ? 'Desconocida (da un rango)' : x.charAt(0) + x.slice(1).toLowerCase()) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="col"><span class="etq">¿SE CUENTA CON LA TRAZA?</span><select id="oTra"><option value="NO">No (se agrega ' + h(E.cat.textos.pctPiezas || 3) + ' % de piezas especiales)</option><option value="SI"' + (a.tieneTraza ? ' selected' : '') + '>Sí (el KMZ va en su carpeta de Drive)</option></select></label>' +
+      '<label class="col"><span class="etq">HINCADO / CRUCE (M, OPCIONAL)</span><input type="number" id="oHin" min="0" step="0.1" value="' + h(a.hincado || '') + '"></label>' +
+      '<label class="col"><span class="etq">NOMBRE (SE PROPONE SOLO)</span><input type="text" id="oNom" value="' + h(p.nombre || '') + '" placeholder="Línea de agua potable 10 in – Colonia (año)"></label>' +
+      '</div><label class="col"><span class="etq">OBSERVACIONES</span><textarea id="oObs">' + h(p.obs || '') + '</textarea></label>' +
+      '<div id="oPrev" class="prev"></div>' +
+      '<div class="fila" style="justify-content:flex-end"><button class="btn" id="oX">Cancelar</button><button class="btn" id="oCalc">Calcular</button><button class="btn pri" id="oOk">Guardar</button></div>');
+    var datos = function () {
+      return { id: p.id || '', sistema: $('#oSis').value, diametro: $('#oDia').value, longitud: $('#oLon').value, anio: $('#oAnio').value, colonia: $('#oCol').value, calles: $('#oCal').value,
+        superficie: $('#oSup').value, tieneTraza: $('#oTra').value === 'SI', hincado: $('#oHin').value, nombre: $('#oNom').value, obs: $('#oObs').value };
+    };
+    $('#oSis').onchange = function () { $('#oDia').innerHTML = dia(this.value, ''); $('#oPrev').innerHTML = ''; };
+    $('#oX').onclick = cerrarModal;
+    $('#oCalc').onclick = function () {
+      $('#oPrev').innerHTML = '<span class="muted">Calculando…</span>';
+      api('previsualizarEstimacion', datos()).then(function (r) {
+        $('#oPrev').innerHTML = '<div class="inv-cifra" style="font-size:20px">' + h(rangoTxt(r.minTotal, r.maxTotal)) + ' <span class="muted">con IVA</span></div><ul class="muted" style="margin:6px 0 0">' + r.supuestos.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul>';
+      }).catch(function (e) { $('#oPrev').innerHTML = '<span class="error">' + h(e.message) + '</span>'; });
+    };
+    $('#oOk').onclick = function () {
+      var b = this; b.disabled = true; b.textContent = 'Guardando…';
+      api('guardarObraParcial', datos()).then(function (r) {
+        if (!resultado(r, 'Obra guardada.')) { b.disabled = false; b.textContent = 'Guardar'; return; }
+        cerrarModal(); recargarCatalogo().then(function () { abrirFicha(r.id); });
+      }).catch(function (e) { fallo(e); b.disabled = false; b.textContent = 'Guardar'; });
+    };
+  }
+
+  // ===================== TABLA DE PRECIOS (ADMIN) =====================
+  function vistaPrecios() {
+    marco('<div class="muted">Cargando tabla de precios…</div>');
+    api('tablaPrecios').then(function (t) {
+      var version = (t.parametros.find(function (x) { return x.clave === 'VERSION_PRECIOS'; }) || {}).valor;
+      marco('<section class="fila entre"><div><h1 class="titulo">Tabla de precios</h1><span class="muted">Versión ' + h(version) + ' · Solo visible para el administrador. Se usa en las obras con datos parciales.</span></div></section>' +
+        '<section class="tarjeta"><h2>Precios unitarios (sin IVA)</h2><p class="muted">CATÁLOGO: base 2022 × factor. ESTIMADO: tubería de agua potable de 10", 12" y 14" a partir de 8". COTIZACIÓN: precio directo. La columna CONAGUA 2025 es solo referencia.</p>' +
+        '<div class="tabla-caja"><table class="t precios"><thead><tr><th style="text-align:left">Concepto</th><th>Unidad</th><th>Clave CEA</th><th>Fuente</th><th>Base 2022</th><th>Cotización</th><th>Aplicado</th><th>CONAGUA 2025</th><th style="text-align:left">Nota</th><th></th></tr></thead><tbody>' +
+        t.precios.map(function (o) {
+          return '<tr data-id="' + h(o.id) + '"><td>' + h(o.descripcion) + '</td><td class="c">' + h(o.unidad) + '</td><td class="c"><input type="text" data-k="clave" value="' + h(o.clave || '') + '" style="width:110px"></td>' +
+            '<td class="c"><select data-k="fuente">' + t.fuentes.map(function (f) { return '<option' + (f === o.fuente ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select></td>' +
+            '<td class="c"><input type="number" step="0.01" data-k="base" value="' + h(o.base || '') + '" style="width:110px"></td>' +
+            '<td class="c"><input type="number" step="0.01" data-k="directo" value="' + h(o.directo || '') + '" style="width:110px"></td>' +
+            '<td class="c"><b>' + fmtMoneda(o.pu) + '</b></td><td class="c"><input type="number" step="0.01" data-k="conagua" value="' + h(o.conagua || '') + '" style="width:100px"></td>' +
+            '<td><input type="text" data-k="nota" value="' + h(o.nota || '') + '" style="width:220px"></td><td class="c"><button class="btn chico" data-gp="' + h(o.id) + '">Guardar</button></td></tr>';
+        }).join('') + '</tbody></table></div></section>' +
+        '<section class="tarjeta"><h2>Parámetros</h2><div class="tabla-caja"><table class="t"><thead><tr><th style="text-align:left">Parámetro</th><th style="text-align:left">Valor</th><th></th></tr></thead><tbody>' +
+        t.parametros.filter(function (x) { return x.clave !== 'VERSION_PRECIOS'; }).map(function (x) {
+          var largo = x.clave === 'LEYENDA' || x.clave === 'AVISO';
+          return '<tr><td><b>' + h(x.clave) + '</b><br><span class="muted">' + h(x.descripcion) + '</span></td><td>' + (largo ? '<textarea data-par="' + h(x.clave) + '" style="min-height:70px">' + h(x.valor) + '</textarea>' : '<input type="text" data-par="' + h(x.clave) + '" value="' + h(x.valor) + '" style="width:120px">') + '</td>' +
+            '<td class="c"><button class="btn chico" data-gpar="' + h(x.clave) + '">Guardar</button></td></tr>';
+        }).join('') + '</tbody></table></div><p class="muted">Cambiar un precio o un parámetro numérico sube la versión de la tabla. Las obras ya calculadas conservan su cifra hasta que uses "Recalcular con precios vigentes" en su ficha.</p></section>');
+      $$('[data-gp]').forEach(function (b) {
+        b.onclick = function () {
+          var tr = b.closest('tr'), d = {};
+          $$('[data-k]', tr).forEach(function (i) { d[i.getAttribute('data-k')] = i.value; });
+          api('guardarPrecio', b.getAttribute('data-gp'), d).then(function (r) { if (resultado(r, 'Precio guardado (versión ' + (r && r.version) + ').')) vistaPrecios(); }).catch(fallo);
+        };
+      });
+      $$('[data-gpar]').forEach(function (b) {
+        b.onclick = function () {
+          var k = b.getAttribute('data-gpar');
+          api('guardarParametroEst', k, $('[data-par="' + k + '"]').value).then(function (r) { if (resultado(r, 'Parámetro guardado.')) recargarCatalogo().then(vistaPrecios); }).catch(fallo);
+        };
+      });
+    }).catch(fallo);
+  }
+
+  // ===================== LECTURA DE DATOS DE LOS DOCUMENTOS =====================
+  function bytesDe(b64) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+
+  /** Lee los documentos de la opción (y los comunes) y devuelve {valores, avisos, leidos}. */
+  function leerDocumentos(p, a) {
+    var X = window.Extraccion;
+    var docs = p.documentos.filter(function (d) {
+      var deLaOpcion = p.alternativas.length === 1 || !d.alternativa || d.alternativa === a.id;
+      return deLaOpcion && ['REJ', 'PPT', 'MD'].indexOf(d.tipo) !== -1 && /\.(pdf|xlsx|xls|docx)$/i.test(d.nombre);
+    });
+    if (!docs.length) return Promise.reject(new Error('No hay resumen ejecutivo, presupuesto ni memoria (PDF, Excel o Word) registrados para esta opción. Usa "Actualizar archivos" en Documentos.'));
+    var libs = [];
+    if (docs.some(function (d) { return /\.pdf$/i.test(d.nombre); })) libs.push(cargarScript(CDN.pdfjs).then(function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = CDN.pdfjsWorker; }));
+    if (docs.some(function (d) { return /\.xlsx?$/i.test(d.nombre); })) libs.push(cargarScript(CDN.xlsx));
+    if (docs.some(function (d) { return /\.docx$/i.test(d.nombre); })) libs.push(cargarScript(CDN.jszip));
+    var resultados = [], leidos = [];
+    return Promise.all(libs).then(function () {
+      return docs.reduce(function (prom, d, i) {
+        return prom.then(function () {
+          aviso('Leyendo ' + (i + 1) + ' de ' + docs.length + ': ' + d.nombre, 60000);
+          return api('documento', d.id).then(function (r) {
+            var b = bytesDe(r.b64);
+            if (/\.pdf$/i.test(d.nombre)) return X.filasPdf(window.pdfjsLib, b);
+            if (/\.xlsx?$/i.test(d.nombre)) return X.filasXlsx(window.XLSX, b);
+            return X.filasDocx(window.JSZip, b);
+          }).then(function (filas) {
+            var datos = X.extraer(filas);
+            resultados.push({ nombre: d.nombre, prioridad: X.prioridad(d.tipo, d.nombre), datos: datos });
+            leidos.push({ nombre: d.nombre, n: Object.keys(datos).length });
+          }).catch(function (e) { leidos.push({ nombre: d.nombre, error: e.message }); });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      aviso('Lectura terminada.');
+      var c = X.combinar(resultados); c.leidos = leidos; return c;
+    });
   }
 
   // ===================== MODAL =====================
