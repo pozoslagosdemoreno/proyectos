@@ -387,7 +387,7 @@
       '<label class="tabs-movil col"><span class="etq">SECCIÓN</span><select id="fTabM">' + tabs.map(function (t) { return '<option value="' + t[0] + '"' + (E.tab === t[0] ? ' selected' : '') + '>' + h(t[1]) + '</option>'; }).join('') + '</select></label>' +
       '<div id="fCont"></div>' + avisoGeneral());
     $('#fVolver').onclick = function () { ir(esTerminado(p) ? 'terminados' : 'nuevos'); };
-    $('#fPdf').onclick = function () { pdfFicha(p); };
+    $('#fPdf').onclick = function () { pdfFicha(E.ficha); };   // siempre con los datos más recientes de la ficha
     if ($('#fEditar')) $('#fEditar').onclick = function () { if (esParcial(p)) formObraParcial(p); else formProyecto(p); };
     if ($('#fEstado')) $('#fEstado').onclick = function () { formEstado(p); };
     $$('[data-tab]').forEach(function (b) { b.onclick = function () { E.tab = b.getAttribute('data-tab'); pintarFicha(); }; });
@@ -941,7 +941,7 @@
   function mapaEstatico(capas, puntos, W, H) {
     var todos = [];
     capas.forEach(function (c) { c.p.forEach(function (q) { todos.push(q); }); });
-    puntos.forEach(function (x) { todos.push(x.p); });
+    if (!todos.length) puntos.forEach(function (x) { todos.push(x.p); });   // el encuadre lo dan las líneas; los puntos solo si no hay líneas
     if (!todos.length) return Promise.resolve(null);
     var proyectar = function (lat, lon, z) {
       var s = 256 * Math.pow(2, z), sl = Math.sin(lat * Math.PI / 180);
@@ -986,6 +986,13 @@
     }).then(function (r) {
       var g = r.c.getContext('2d');
       g.lineCap = 'round'; g.lineJoin = 'round';
+      // Puntos del KMZ: pequeños y debajo de las líneas (solo los que caen dentro del mapa)
+      var radio = capas.length ? 4 : 9;
+      puntos.forEach(function (x) {
+        var a = proyectar(x.p[0], x.p[1], z), px = a[0] - ox, py = a[1] - oy;
+        if (px < 0 || py < 0 || px > W || py > H) return;
+        g.beginPath(); g.arc(px, py, radio, 0, 2 * Math.PI); g.fillStyle = '#0b3954'; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+      });
       capas.forEach(function (cp) {
         g.beginPath(); g.setLineDash(cp.dash || []);
         cp.p.forEach(function (q, i) { var a = proyectar(q[0], q[1], z); if (i) g.lineTo(a[0] - ox, a[1] - oy); else g.moveTo(a[0] - ox, a[1] - oy); });
@@ -993,10 +1000,6 @@
         g.strokeStyle = cp.color; g.lineWidth = cp.ancho; g.stroke();
       });
       g.setLineDash([]);
-      puntos.forEach(function (x) {
-        var a = proyectar(x.p[0], x.p[1], z);
-        g.beginPath(); g.arc(a[0] - ox, a[1] - oy, 9, 0, 2 * Math.PI); g.fillStyle = '#0b3954'; g.fill(); g.lineWidth = 3; g.strokeStyle = '#fff'; g.stroke();
-      });
       // Escala gráfica
       var latC = todos.reduce(function (s, q) { return s + q[0]; }, 0) / todos.length;
       var mpp = 156543.03392 * Math.cos(latC * Math.PI / 180) / Math.pow(2, z);
