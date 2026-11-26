@@ -104,7 +104,31 @@
     { c: 'total', re: /GRAN TOTAL/, tipo: 'num', min: 1 },
     { c: 'total', re: /INVERSION ESTIMADA\s*:/, tipo: 'num', min: 1, respaldo: true }
   ];
-  var ETIQUETAS = { longitud: 'Longitud (m)', diametro: 'Diámetro (pulg)', material: 'Material', poblacion: 'Población beneficiada', subA: 'Subtotal A', subB: 'Subtotal B', subC: 'Subtotal C', subD: 'Subtotal D', subE: 'Subtotal E', sinIva: 'Subtotal sin IVA', iva: 'IVA', total: 'Total con IVA', duracion: 'Duración (días hábiles)' };
+  var ETIQUETAS = { longitud: 'Longitud (m)', diametro: 'Diámetro (pulg)', material: 'Material', poblacion: 'Población beneficiada', subA: 'Subtotal A', subB: 'Subtotal B', subC: 'Subtotal C', subD: 'Subtotal D', subE: 'Subtotal E', sinIva: 'Subtotal sin IVA', iva: 'IVA', total: 'Total con IVA', duracion: 'Duración (días hábiles)',
+    inicioObra: 'Inicio de obra (cronograma)', finObra: 'Término de obra (cronograma)', anioCaratula: 'Año en la carátula' };
+
+  var MESES = { ENE: 1, ENERO: 1, FEB: 2, FEBRERO: 2, MAR: 3, MARZO: 3, ABR: 4, ABRIL: 4, MAY: 5, MAYO: 5, JUN: 6, JUNIO: 6, JUL: 7, JULIO: 7, AGO: 8, AGOSTO: 8,
+    SEP: 9, SEPT: 9, SEPTIEMBRE: 9, SETIEMBRE: 9, OCT: 10, OCTUBRE: 10, NOV: 11, NOVIEMBRE: 11, DIC: 12, DICIEMBRE: 12 };
+
+  /** "20/10/2025" o "20-10-25" → "2025-10-20" (o null si no es una fecha válida). */
+  function fechaIso(txt) {
+    var m = String(txt || '').match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if (!m) return null;
+    var d = Number(m[1]), mes = Number(m[2]), a = Number(m[3]);
+    if (a < 100) a += 2000;
+    if (d < 1 || d > 31 || mes < 1 || mes > 12 || a < 1990 || a > 2100) return null;
+    return a + '-' + (mes < 10 ? '0' : '') + mes + '-' + (d < 10 ? '0' : '') + d;
+  }
+
+  /** Año de una fecha escrita: "20/10/2025", "octubre de 2026", "OCT-2026", "Oct 2026". */
+  function anioDeTexto(txt) {
+    var iso = fechaIso(txt);
+    if (iso) return Number(iso.slice(0, 4));
+    var t = norm(txt);
+    var m = t.match(/\b(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|SETIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE|ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEPT?|OCT|NOV|DIC)\.?(?:\s+DE\s+|\s*[\/\-]\s*|\s+)(\d{4})\b/);
+    if (m && MESES[m[1]]) { var a = Number(m[2]); if (a >= 1990 && a <= 2100) return a; }
+    return null;
+  }
 
   /** Busca los datos en las filas de un documento. Devuelve {campo: valor}. */
   function extraer(filas) {
@@ -151,10 +175,38 @@
       var nums = limpias[i2].join(' ').replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, ' ').match(/\b\d{1,4}\b/g);
       if (nums) datos.duracion = Number(nums[nums.length - 1]);
     }
+    // Cronograma (resumen ejecutivo): "DURACIÓN TOTAL DEL PROYECTO … Inicio: 20/10/2025 … Fin: 22/12/2025"
+    for (var i3 = 0; i3 < limpias.length && datos.finObra == null; i3++) {
+      if (!/DURACION TOTAL/.test(norm(limpias[i3].join(' ')))) continue;
+      var vent = limpias.slice(i3, i3 + 3).map(function (r) { return r.join(' '); }).join(' ');
+      var mi = vent.match(/inicio\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i), mf = vent.match(/\bfin\s*:?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i);
+      if (mi && fechaIso(mi[1])) datos.inicioObra = fechaIso(mi[1]);
+      if (mf && fechaIso(mf[1])) datos.finObra = fechaIso(mf[1]);
+    }
+    // Respaldo: la fecha más temprana y la más tardía de la tabla del cronograma
+    if (datos.finObra == null) {
+      var ini = -1;
+      for (var i4 = 0; i4 < limpias.length; i4++) { if (/CRONOGRAMA/.test(norm(limpias[i4].join(' ')))) { ini = i4; break; } }
+      if (ini !== -1) {
+        var fechas = [];
+        limpias.slice(ini, ini + 60).forEach(function (r) {
+          (r.join(' ').match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g) || []).forEach(function (f) { var iso = fechaIso(f); if (iso) fechas.push(iso); });
+        });
+        if (fechas.length >= 2) { fechas.sort(); datos.inicioObra = datos.inicioObra || fechas[0]; datos.finObra = fechas[fechas.length - 1]; }
+      }
+    }
+    // Fecha de la carátula: solo los primeros renglones del documento (primera página o cajetín)
+    var primeros = limpias.slice(0, 45);
+    for (var i5 = 0; i5 < primeros.length && datos.anioCaratula == null; i5++) {
+      var linea = primeros[i5].join(' ');
+      if (/REV(ISION)?\.?\s*\d|CRONOGRAMA|NORMA|NOM-|NMX-/i.test(norm(linea))) continue;
+      var an = anioDeTexto(linea);
+      if (an) datos.anioCaratula = an;
+    }
     return datos;
   }
 
-  var PRIORIDAD = { REJ: 1, PPT: 2, MD: 4, OTRO: 5 };
+  var PRIORIDAD = { REJ: 1, PPT: 2, MD: 4, PLA: 5, PLG: 5, OTRO: 6 };
 
   /** Une los datos de varios documentos según la prioridad (resumen ejecutivo > presupuesto PDF > presupuesto Excel > memoria). */
   function combinar(resultados) {
@@ -166,7 +218,7 @@
       valores[c] = { valor: con[0].datos[c], fuente: con[0].nombre };
       con.slice(1).forEach(function (r) {
         var a = con[0].datos[c], b = r.datos[c];
-        var distinto = typeof a === 'number' ? Math.abs(a - b) > Math.max(0.5, Math.abs(a) * 0.005) : norm(a) !== norm(b);
+        var distinto = c === 'anioCaratula' ? false : typeof a === 'number' ? Math.abs(a - b) > Math.max(0.5, Math.abs(a) * 0.005) : norm(a) !== norm(b);
         if (distinto) avisos.push(ETIQUETAS[c] + ': ' + formato(b) + ' en "' + r.nombre + '"; se usó ' + formato(a) + ' de "' + con[0].nombre + '".');
       });
     });
@@ -187,7 +239,7 @@
     return p;
   }
 
-  var api = { filasPdf: filasPdf, filasXlsx: filasXlsx, filasDocx: filasDocx, extraer: extraer, combinar: combinar, prioridad: prioridad, numero: numero, ETIQUETAS: ETIQUETAS };
+  var api = { filasPdf: filasPdf, filasXlsx: filasXlsx, filasDocx: filasDocx, extraer: extraer, combinar: combinar, prioridad: prioridad, numero: numero, fechaIso: fechaIso, anioDeTexto: anioDeTexto, ETIQUETAS: ETIQUETAS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else raiz.Extraccion = api;
 })(this);

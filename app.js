@@ -10,7 +10,10 @@
     pdfjs: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
     pdfjsWorker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
     xlsx: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-    jszip: 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'
+    jszip: 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+    jspdf: 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js',
+    autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js',
+    chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js'
   };
   var CENTRO = [21.356, -101.93];
   var COLOR_SISTEMA = { 'AGUA POTABLE': '#1f6fb5', 'ALCANTARILLADO': '#8a5a2b' };
@@ -19,7 +22,8 @@
 
   var E = {
     token: leer('pr_token'), usuario: null, cat: null, vista: 'inicio', ficha: null, tab: 'resumen',
-    filtros: { sistema: '', estado: '', q: '', cancelados: false, info: '' }, videos: null, videoSel: '', mapas: {}
+    filtros: { sistema: '', estado: '', q: '', cancelados: false, info: '' }, mapas: {},
+    filtrosAn: { desde: '', hasta: '', sistema: '', incluir: '' }, graficas: [], analisis: null
   };
 
   // ===================== UTILIDADES =====================
@@ -79,6 +83,7 @@
     return E.cat.colonias.find(function (c) { return norm(c.n).trim() === q; }) || E.cat.colonias.find(function (c) { var t = norm(c.n); return t.indexOf(q) !== -1 || q.indexOf(t) !== -1; }) || null;
   }
 
+  var ICONO_PDF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right:6px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6"/><path d="M9 15l3 3 3-3"/></svg>';
   var OJO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var OJO_NO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.8 10.8 0 0 1 12 19c-7 0-11-7-11-7a19.8 19.8 0 0 1 5.1-5.9M9.9 4.2A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a19.9 19.9 0 0 1-2.2 3.3M14.1 14.1a3 3 0 1 1-4.2-4.2"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
   function campoClave(id, atributos) {
@@ -186,10 +191,11 @@
 
   function marco(contenido) {
     var u = E.usuario || {};
-    var nav = [['inicio', 'Inicio'], ['nuevos', 'Proyectos nuevos'], ['terminados', 'Proyectos terminados'], ['videos', 'Videos']];
+    var nav = [['inicio', 'Inicio'], ['nuevos', 'Proyectos nuevos'], ['terminados', 'Proyectos terminados'], ['analisis', 'Análisis']];
     if (esAdmin()) { nav.push(['precios', 'Precios']); nav.push(['usuarios', 'Usuarios']); }
     var activa = E.vista === 'ficha' ? (E.ficha && esTerminado(E.ficha) ? 'terminados' : 'nuevos') : E.vista;
     Object.keys(E.mapas).forEach(function (k) { try { E.mapas[k].remove(); } catch (e) {} delete E.mapas[k]; });
+    (E.graficas || []).forEach(function (g) { try { g.destroy(); } catch (e) {} }); E.graficas = [];
     $('#app').innerHTML = '<header class="enc"><div class="enc-marca"><img src="logo.jpg" alt=""><div class="enc-tit"><b>AGUA POTABLE Y ALCANTARILLADO</b><span>CARTERA DE PROYECTOS</span></div></div>' +
       '<nav aria-label="Menú">' + nav.map(function (x) { return '<button data-ir="' + x[0] + '" class="' + (activa === x[0] ? 'activo' : '') + '">' + x[1] + '</button>'; }).join('') +
       '<span class="usuario">' + h(u.nombre || '') + ' · ' + h(rol()) + '</span><button data-accion="clave" title="Cambiar contraseña">Contraseña</button><button data-accion="salir">Salir</button></nav></header>' +
@@ -205,9 +211,9 @@
     if (vista === 'inicio') return vistaInicio();
     if (vista === 'nuevos') return vistaLista(false);
     if (vista === 'terminados') return vistaLista(true);
-    if (vista === 'videos') return vistaVideos();
     if (vista === 'usuarios') return vistaUsuarios();
     if (vista === 'precios') return vistaPrecios();
+    if (vista === 'analisis') return vistaAnalisis();
   }
 
   // ===================== FILTROS =====================
@@ -294,7 +300,7 @@
         if (!dibujo) sin.push(p);
       });
       capa.addTo(m); m._capaProy = capa;
-      if (capa.getLayers().length) m.fitBounds(capa.getBounds(), { padding: [30, 30], maxZoom: 16 });
+      if (capa.getLayers().length) m.fitBounds(capa.getBounds(), { padding: [30, 30], maxZoom: 16, animate: false });
       $('#sinTraza').innerHTML = sin.length ? '<section class="tarjeta"><h3>Sin ubicación en el mapa (' + sin.length + ')</h3><p class="muted">Proyectos sin traza cargada u obras con datos parciales sin colonia reconocida. Para la traza, deja el KMZ en su carpeta de Drive y usa "Actualizar archivos" en la ficha.</p><div class="fila">' +
         sin.map(function (p) { return '<button class="btn chico" data-abrir="' + h(p.id) + '">' + h(p.id) + ' · ' + h(p.nombre) + '</button>'; }).join('') + '</div></section>' : '';
       enlazarAbrir();
@@ -356,7 +362,7 @@
       '<h3>' + h(p.nombre) + '</h3>' +
       '<div class="fila" style="gap:6px">' + chipSistema(p.sistema) + (p.diametro ? '<span class="chip gris">Ø ' + h(p.diametro) + '"</span>' : '') + (p.colonia ? '<span class="muted">' + h(p.colonia) + '</span>' : '') + '</div>' +
       cuerpo + '<div>' + chipInv(inv.tipo) + '</div>' +
-      '<div class="muted">' + p.nDocs + ' documento(s) · ' + p.nVideos + ' video(s)' + (esParcial(p) && p.anio ? ' · Año ' + h(p.anio) : '') + (esTerminado(p) && p.termino ? ' · Terminado ' + fmtFecha(p.termino) : '') + '</div></article>';
+      '<div class="muted">' + p.nDocs + ' documento(s)' + (p.anio ? ' · Año ' + h(p.anio) : '') + (esTerminado(p) && p.termino ? ' · Terminado ' + fmtFecha(p.termino) : '') + '</div></article>';
   }
 
   // ===================== FICHA =====================
@@ -372,20 +378,21 @@
 
   function pintarFicha() {
     var p = E.ficha, editar = puedeEditar(p);
-    var tabs = [['resumen', 'Resumen'], ['traza', 'Traza'], ['documentos', 'Documentos (' + p.documentos.length + ')'], ['videos', 'Videos (' + p.videos.length + ')'], ['historial', 'Historial']];
+    var tabs = [['resumen', 'Resumen'], ['traza', 'Traza'], ['documentos', 'Documentos (' + p.documentos.length + ')'], ['historial', 'Historial']];
     marco('<section class="fila entre"><button class="btn chico" id="fVolver">‹ ' + (esTerminado(p) ? 'Proyectos terminados' : 'Proyectos nuevos') + '</button>' +
-      '<div class="fila">' + (editar ? '<button class="btn" id="fEditar">Editar datos</button>' : '') + (esAdmin() ? '<button class="btn" id="fEstado">Cambiar estado</button>' : '') + '</div></section>' +
-      '<section class="tarjeta"><div class="fila" style="gap:8px"><span class="clave-p">' + h(p.id) + (p.clave ? ' · Documentos ' + h(p.clave) : '') + '</span>' + chipSistema(p.sistema) + chipEstado(p.estado) + '</div>' +
+      '<div class="fila"><button class="btn pri" id="fPdf">' + ICONO_PDF + 'Descargar PDF</button>' + (editar ? '<button class="btn" id="fEditar">Editar datos</button>' : '') + (esAdmin() ? '<button class="btn" id="fEstado">Cambiar estado</button>' : '') + '</div></section>' +
+      '<section class="tarjeta"><div class="fila" style="gap:8px"><span class="clave-p">' + h(p.id) + (p.clave ? ' · Documentos ' + h(p.clave) : '') + '</span>' + chipSistema(p.sistema) + chipEstado(p.estado) + (p.anio ? '<span class="chip inv-par">Año ' + h(p.anio) + '</span>' : '') + '</div>' +
       '<h1 class="titulo" style="margin:8px 0 0">' + h(p.nombre) + '</h1></section>' +
       '<div class="tabs" role="tablist">' + tabs.map(function (t) { return '<button role="tab" data-tab="' + t[0] + '" class="' + (E.tab === t[0] ? 'activo' : '') + '">' + h(t[1]) + '</button>'; }).join('') + '</div>' +
       '<label class="tabs-movil col"><span class="etq">SECCIÓN</span><select id="fTabM">' + tabs.map(function (t) { return '<option value="' + t[0] + '"' + (E.tab === t[0] ? ' selected' : '') + '>' + h(t[1]) + '</option>'; }).join('') + '</select></label>' +
       '<div id="fCont"></div>' + avisoGeneral());
     $('#fVolver').onclick = function () { ir(esTerminado(p) ? 'terminados' : 'nuevos'); };
+    $('#fPdf').onclick = function () { pdfFicha(p); };
     if ($('#fEditar')) $('#fEditar').onclick = function () { if (esParcial(p)) formObraParcial(p); else formProyecto(p); };
     if ($('#fEstado')) $('#fEstado').onclick = function () { formEstado(p); };
     $$('[data-tab]').forEach(function (b) { b.onclick = function () { E.tab = b.getAttribute('data-tab'); pintarFicha(); }; });
     $('#fTabM').onchange = function () { E.tab = this.value; pintarFicha(); };
-    ({ resumen: tabResumen, traza: tabTraza, documentos: tabDocumentos, videos: tabVideos, historial: tabHistorial })[E.tab]();
+    ({ resumen: tabResumen, traza: tabTraza, documentos: tabDocumentos, historial: tabHistorial })[E.tab]();
   }
 
   function dato(etq, v) { return '<div class="dato"><span class="etq">' + h(etq) + '</span><span>' + (v == null || v === '' ? '<span class="muted">—</span>' : v) + '</span></div>'; }
@@ -395,7 +402,7 @@
     if (esParcial(p)) return tabResumenParcial();
     var html = '<section class="tarjeta"><h2>Ficha técnica</h2><div class="datos">' +
       dato('Tipo de obra', h(p.tipoObra)) + dato('Diámetro', p.diametro ? h(p.diametro) + ' pulg' : '') + dato('Material', h(p.material)) +
-      dato('Colonia', h(p.colonia)) + dato('Calles', h(p.calles)) + dato('Fuente de financiamiento', h(p.fuente)) +
+      dato('Colonia', h(p.colonia)) + dato('Calles', h(p.calles)) + dato('Fuente de financiamiento', h(p.fuente)) + dato('Año del proyecto', h(p.anio)) +
       (term || p.inicio ? dato('Inicio de obra', fmtFecha(p.inicio)) : '') + (term || p.termino ? dato('Término de obra', fmtFecha(p.termino)) : '') +
       (term || p.montoEjercido ? dato('Monto ejercido', p.montoEjercido ? fmtMoneda(p.montoEjercido) : '') : '') +
       '</div>' + (p.obs ? '<p style="margin:12px 0 0;white-space:pre-wrap">' + h(p.obs) + '</p>' : '') + '</section>';
@@ -505,7 +512,7 @@
     var docsDe = function (g) { return p.documentos.filter(function (d) { return alts.length > 1 ? d.alternativa === g.id : true; }); };
     var html = '<section class="tarjeta"><div class="fila entre"><h2 style="margin:0">Documentos</h2>' +
       (editar ? '<div class="fila">' + (esAdmin() && p.carpeta ? '<a class="btn chico" href="https://drive.google.com/drive/folders/' + h(p.carpeta) + '" target="_blank" rel="noopener">Abrir carpeta en Drive</a>' : '') + '<button class="btn pri" id="bAct">Actualizar archivos</button></div>' : '') + '</div>' +
-      (editar ? '<p class="muted">Para agregar archivos, déjalos en Drive dentro de <b>APP_PROYECTOS › PROYECTOS › ' + h(p.id) + '_…</b>' + (alts.length > 1 ? ' (en la carpeta <b>Opcion_A</b>, <b>Opcion_B</b>… si son de una sola opción; en la carpeta del proyecto si son comunes)' : '') + ' y toca <b>Actualizar archivos</b>. Los videos se pasan solos a la carpeta VIDEOS.</p>' : '') +
+      (editar ? '<p class="muted">Para agregar archivos, déjalos en Drive dentro de <b>APP_PROYECTOS › PROYECTOS › ' + h(p.id) + '_…</b>' + (alts.length > 1 ? ' (en la carpeta <b>Opcion_A</b>, <b>Opcion_B</b>… si son de una sola opción; en la carpeta del proyecto si son comunes)' : '') + ' y toca <b>Actualizar archivos</b>.</p>' : '') +
       '</section>';
     grupos.forEach(function (g) {
       var docs = docsDe(g);
@@ -556,20 +563,6 @@
     };
   }
 
-  function reproductor(v) {
-    return '<div class="video"><iframe src="https://drive.google.com/file/d/' + encodeURIComponent(v.id) + '/preview" allow="autoplay; fullscreen" allowfullscreen title="' + h(v.titulo) + '"></iframe></div>';
-  }
-
-  function tabVideos() {
-    var p = E.ficha;
-    $('#fCont').innerHTML = p.videos.length ? p.videos.map(function (v) {
-      var otros = v.proyectos.filter(function (x) { return x.id !== p.id; });
-      return '<section class="tarjeta"><h3>' + h(v.titulo) + '</h3>' + reproductor(v) +
-        (otros.length ? '<p class="muted">Este video también muestra: ' + otros.map(function (x) { return '<a href="#" data-abrir="' + h(x.id) + '">' + h(x.nombre) + '</a>'; }).join(', ') + '</p>' : '') + '</section>';
-    }).join('') : '<section class="tarjeta"><h2>Sin videos</h2><p class="muted">' + (esAdmin() ? 'Sube el video a la carpeta VIDEOS de Drive y lígalo con este proyecto desde la sección Videos.' : 'Aún no hay videos ligados a este proyecto.') + '</p></section>';
-    $$('[data-abrir]').forEach(function (a) { a.onclick = function (ev) { ev.preventDefault(); abrirFicha(a.getAttribute('data-abrir'), 'videos'); }; });
-  }
-
   function tabHistorial() {
     var l = E.ficha.historial;
     $('#fCont').innerHTML = '<section class="tarjeta"><h2>Historial</h2>' + (l.length ? '<div class="tabla-caja"><table class="t"><thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th style="text-align:left">Detalle</th></tr></thead><tbody>' +
@@ -592,6 +585,7 @@
       '<label class="col"><span class="etq">FUENTE DE FINANCIAMIENTO</span><select id="pFue">' + opciones(L.fuentes, p.fuente, '—') + '</select></label>' +
       '<label class="col"><span class="etq">DIÁMETRO (PULG)</span><input type="text" id="pDia" value="' + h(p.diametro || '') + '" inputmode="decimal"></label>' +
       '<label class="col"><span class="etq">MATERIAL</span><input type="text" id="pMat" value="' + h(p.material || '') + '" placeholder="Ej. PVC RD-25"></label>' +
+      '<label class="col"><span class="etq">AÑO DEL PROYECTO</span><input type="number" id="pAnio" min="1990" max="2100" step="1" value="' + h(p.anio || '') + '"><span class="muted">' + (term ? 'Año de la fecha Fin del cronograma.' : 'Año de la fecha de la propuesta (carátula).') + ' Se puede leer de los documentos.</span></label>' +
       '<label class="col"><span class="etq">COLONIA</span><input type="text" id="pCol" value="' + h(p.colonia || '') + '"></label>' +
       '<label class="col"><span class="etq">CALLES / TRAMO</span><input type="text" id="pCal" value="' + h(p.calles || '') + '"></label>' +
       (term || p.inicio ? '<label class="col"><span class="etq">INICIO DE OBRA</span><input type="date" id="pIni" value="' + h(p.inicio || '') + '"></label>' : '') +
@@ -608,7 +602,7 @@
       var v = function (id) { var el = $('#' + id); return el ? el.value : ''; };
       var d = { id: p.id || '', nombre: v('pNom'), sistema: nuevo ? v('pSis') : p.sistema, clave: v('pCla'), tipoObra: v('pTip'), fuente: v('pFue'), diametro: v('pDia'), material: v('pMat'),
         colonia: v('pCol'), calles: v('pCal'), inicio: $('#pIni') ? v('pIni') : (p.inicio || ''), termino: $('#pTer') ? v('pTer') : (p.termino || ''), montoEjercido: $('#pMon') ? v('pMon') : (p.montoEjercido || ''),
-        obs: v('pObs'), estado: v('pEst'), opciones: $('#pOpc') ? Number(v('pOpc')) : 1 };
+        obs: v('pObs'), anio: v('pAnio'), estado: v('pEst'), opciones: $('#pOpc') ? Number(v('pOpc')) : 1 };
       var b = this; b.disabled = true; b.textContent = 'Guardando…';
       api('guardarProyecto', d).then(function (r) {
         if (!resultado(r, 'Proyecto guardado.')) { b.disabled = false; b.textContent = 'Guardar'; return; }
@@ -619,7 +613,7 @@
   }
 
   function formAlternativa(p, a) {
-    var nueva = !a; a = a || {};
+    var nueva = !a; a = a || {}; var cambioProyecto = false;
     var campo = function (id, etq, val, extra) { return '<label class="col"><span class="etq">' + etq + '</span><input type="number" step="0.01" id="' + id + '" value="' + h(val || '') + '" ' + (extra || '') + '></label>'; };
     abrirModal('<h2 style="margin:0">' + (nueva ? 'Agregar opción' : (p.alternativas.length > 1 ? 'Opción ' + h(a.letra) : 'Datos del proyecto')) + ' · ' + h(p.id) + '</h2>' +
       (esTerminado(p) ? '<p class="muted" style="margin:0">Captura los datos tal como vienen en el resumen ejecutivo.</p>' : '') +
@@ -658,15 +652,26 @@
         var sug = [];
         if (c.valores.diametro && String(c.valores.diametro.valor) !== String(p.diametro || '')) sug.push('Diámetro en documentos: ' + c.valores.diametro.valor + '" (ficha: ' + (p.diametro || '—') + ')');
         if (c.valores.material && norm(c.valores.material.valor) !== norm(p.material || '')) sug.push('Material en documentos: ' + c.valores.material.valor + ' (ficha: ' + (p.material || '—') + ')');
+        var sa = sugerenciaAnio(p, c.valores);
         cuadre();
         $('#aLeido').innerHTML = '<div class="leido-caja">' +
+          (sa ? '<div class="leido-anio"><div style="flex:1;min-width:240px"><b>Año del proyecto: ' + h(sa.anio) + '</b>' + (String(p.anio || '') === String(sa.anio) ? ' <span class="ok-txt">(ya está en la ficha)</span>' : (p.anio ? ' <span class="muted">(en la ficha: ' + h(p.anio) + ')</span>' : '')) +
+            '<br><span class="muted">' + h(sa.motivo) + ' en "' + h(sa.fuente) + '"' + (sa.inicio || sa.termino ? ' · Inicio de obra ' + fmtFecha(sa.inicio) + ' · Término ' + fmtFecha(sa.termino) : '') + '</span></div>' +
+            '<button class="btn chico" type="button" id="aAnio">' + (sa.inicio || sa.termino ? 'Guardar año y fechas en el proyecto' : 'Guardar año en el proyecto') + '</button></div>' : '') +
           (filas.length ? '<b>Datos encontrados (' + filas.length + ')</b><div class="tabla-caja"><table class="t"><thead><tr><th style="text-align:left">Dato</th><th>Valor</th><th style="text-align:left">Archivo</th></tr></thead><tbody>' + filas.join('') + '</tbody></table></div>' : '<b>No se encontraron datos en los documentos.</b>') +
           (c.avisos.length ? '<div class="avisos-lect"><b>Diferencias entre documentos</b><ul>' + c.avisos.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') +
           (sug.length ? '<div class="avisos-lect"><b>Datos del proyecto</b> (se corrigen con "Editar datos")<ul>' + sug.map(function (t) { return '<li>' + h(t) + '</li>'; }).join('') + '</ul></div>' : '') +
           '<p class="muted" style="margin:6px 0 0">Archivos revisados: ' + c.leidos.map(function (x) { return h(x.nombre) + (x.error ? ' (no se pudo leer: ' + h(x.error) + ')' : ' (' + x.n + ' dato[s])'); }).join(' · ') + '. Prioridad: resumen ejecutivo → presupuesto PDF → presupuesto Excel → memoria.</p></div>';
+        if ($('#aAnio')) $('#aAnio').onclick = function () {
+          var bt = this; bt.disabled = true;
+          api('guardarAnioFechas', p.id, { anio: sa.anio, inicio: sa.inicio, termino: sa.termino, fuente: sa.fuente }).then(function (r) {
+            if (!resultado(r, 'Guardado en el proyecto.')) { bt.disabled = false; return; }
+            cambioProyecto = true; bt.textContent = 'Guardado ✓';
+          }).catch(function (e) { fallo(e); bt.disabled = false; });
+        };
       }).catch(function (e) { b.disabled = false; b.textContent = '📄 Leer datos de los documentos'; fallo(e); });
     };
-    $('#aX').onclick = cerrarModal;
+    $('#aX').onclick = function () { cerrarModal(); if (cambioProyecto) recargarFicha(); };
     $('#aOk').onclick = function () {
       var d = { idProyecto: p.id, id: a.id || '', descripcion: val('aDes'), longitud: val('aLon'), poblacion: val('aPob'), duracion: val('aDur'),
         subA: val('aSA'), subB: val('aSB'), subC: val('aSC'), subD: val('aSD'), subE: val('aSE'), sinIva: val('aSin'), iva: val('aIva'), total: val('aTot') };
@@ -694,54 +699,6 @@
     };
   }
 
-  // ===================== VIDEOS =====================
-  function vistaVideos() {
-    marco('<div class="muted">Cargando videos…</div>');
-    api('videos').then(function (l) { E.videos = l; pintarVideos(); }).catch(fallo);
-  }
-
-  function pintarVideos() {
-    var l = E.videos, sel = l.find(function (v) { return v.id === E.videoSel; }) || l[0];
-    var grupos = [['AGUA POTABLE', 'Agua potable'], ['ALCANTARILLADO', 'Alcantarillado']];
-    var opts = grupos.map(function (g) {
-      var vs = l.filter(function (v) { return v.proyectos.some(function (p) { return p.sistema === g[0]; }); });
-      return vs.length ? '<optgroup label="' + g[1] + '">' + vs.map(function (v) { return '<option value="' + h(v.id) + '"' + (sel && sel.id === v.id ? ' selected' : '') + '>' + h(v.titulo) + '</option>'; }).join('') + '</optgroup>' : '';
-    }).join('');
-    var sinLigar = l.filter(function (v) { return !v.proyectos.length; });
-    if (sinLigar.length) opts += '<optgroup label="Sin ligar a un proyecto">' + sinLigar.map(function (v) { return '<option value="' + h(v.id) + '"' + (sel && sel.id === v.id ? ' selected' : '') + '>' + h(v.titulo) + '</option>'; }).join('') + '</optgroup>';
-    marco('<section class="fila entre"><h1 class="titulo">Videos</h1>' + (esAdmin() ? '<div class="fila"><button class="btn" id="vAct">Actualizar videos</button></div>' : '') + '</section>' +
-      (l.length ? '<section class="tarjeta"><label class="col"><span class="etq">VIDEO</span><select id="vSel">' + opts + '</select></label>' +
-        (sel ? '<div style="margin-top:14px">' + reproductor(sel) + '</div>' +
-          '<div class="fila entre" style="margin-top:12px"><div><b>' + h(sel.titulo) + '</b><div class="muted">' + fmtFecha(sel.fecha) + ' · ' + fmtTam(sel.tamano) + '</div></div>' +
-          (esAdmin() ? '<button class="btn chico" id="vLigar">Editar título y proyectos</button>' : '') + '</div>' +
-          '<div class="fila" style="margin-top:10px">' + (sel.proyectos.length ? '<span class="etq">PROYECTOS EN ESTE VIDEO:</span>' + sel.proyectos.map(function (p) { return '<button class="btn chico" data-abrir="' + h(p.id) + '">' + h(p.id) + ' · ' + h(p.nombre) + '</button>'; }).join('') : '<span class="chip warn">Sin ligar a un proyecto</span>') + '</div>' : '') +
-        '</section>' : '<section class="tarjeta"><h2>Aún no hay videos</h2><p class="muted">' + (esAdmin() ? 'Sube los videos a la carpeta APP_PROYECTOS › VIDEOS de Drive y toca "Actualizar videos".' : 'El administrador todavía no ha cargado videos.') + '</p></section>') +
-      (esAdmin() && sinLigar.length ? '<section class="tarjeta" style="background:var(--warn-bg)"><b>' + sinLigar.length + ' video(s) sin ligar a un proyecto.</b> Elígelos en la lista y usa "Editar título y proyectos".</section>' : ''));
-    if ($('#vSel')) $('#vSel').onchange = function () { E.videoSel = this.value; pintarVideos(); };
-    if ($('#vAct')) $('#vAct').onclick = function () {
-      var b = this; b.disabled = true; b.textContent = 'Revisando la carpeta VIDEOS…';
-      api('actualizarVideos').then(function (r) { aviso('Videos: ' + r.resumen, 6000); vistaVideos(); }).catch(function (e) { fallo(e); b.disabled = false; b.textContent = 'Actualizar videos'; });
-    };
-    if ($('#vLigar')) $('#vLigar').onclick = function () { formLigarVideo(sel); };
-    enlazarAbrir();
-  }
-
-  function formLigarVideo(v) {
-    var ps = E.cat.proyectos.slice().sort(function (a, b) { return a.id.localeCompare(b.id); });
-    var ids = v.proyectos.map(function (p) { return p.id; });
-    abrirModal('<h2 style="margin:0">Video: título y proyectos</h2>' +
-      '<label class="col"><span class="etq">TÍTULO</span><input type="text" id="lvT" value="' + h(v.titulo) + '" maxlength="150"></label>' +
-      '<fieldset class="caja"><legend class="etq">PROYECTOS QUE APARECEN EN EL VIDEO (PUEDEN SER VARIOS)</legend><input type="text" id="lvQ" placeholder="Filtrar" style="width:100%;margin-bottom:8px"><div class="lista-check" id="lvL">' +
-      ps.map(function (p) { return '<label class="fila" style="gap:8px;min-height:36px" data-txt="' + h(norm(p.id + ' ' + p.nombre + ' ' + p.colonia)) + '"><input type="checkbox" value="' + h(p.id) + '"' + (ids.indexOf(p.id) !== -1 ? ' checked' : '') + '><span><b>' + h(p.id) + '</b> · ' + h(p.nombre) + ' <span class="muted">' + h(p.estado) + '</span></span></label>'; }).join('') +
-      '</div></fieldset><div class="fila" style="justify-content:flex-end"><button class="btn" id="lvX">Cancelar</button><button class="btn pri" id="lvOk">Guardar</button></div>');
-    $('#lvQ').oninput = function () { var q = norm(this.value); $$('#lvL label').forEach(function (l) { l.hidden = q && l.getAttribute('data-txt').indexOf(q) === -1; }); };
-    $('#lvX').onclick = cerrarModal;
-    $('#lvOk').onclick = function () {
-      var sel = $$('#lvL input:checked').map(function (i) { return i.value; });
-      api('ligarVideo', v.id, sel, $('#lvT').value).then(function (r) { if (resultado(r, 'Video guardado.')) { cerrarModal(); E.videoSel = v.id; recargarCatalogo().then(vistaVideos); } }).catch(fallo);
-    };
-  }
-
   // ===================== USUARIOS (ADMIN) =====================
   function vistaUsuarios(sub) {
     sub = sub || vistaUsuarios.sub || 'usuarios'; vistaUsuarios.sub = sub;
@@ -754,7 +711,7 @@
     api('listarUsuarios').then(function (l) {
       var selRol = function (u) { return '<select data-rol="' + h(u.usuario) + '" aria-label="Rol de ' + h(u.usuario) + '">' + ['ADMIN', 'PROYECTISTA', 'CONSULTA'].map(function (r) { return '<option' + (u.rol === r ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select>'; };
       $('#uCont').innerHTML = '<section class="tarjeta"><h2>Usuarios</h2>' +
-        '<p class="muted"><b>PROYECTISTA:</b> ve y descarga todo; crea y edita proyectos nuevos. <b>CONSULTA:</b> ve y descarga todo. <b>ADMIN:</b> además cambia estados, registra terminados, liga videos y administra usuarios.</p>' +
+        '<p class="muted"><b>PROYECTISTA:</b> ve y descarga todo; crea y edita proyectos nuevos. <b>CONSULTA:</b> ve y descarga todo. <b>ADMIN:</b> además cambia estados, registra terminados y administra usuarios.</p>' +
         '<form class="fila" id="uNuevo"><input type="text" id="uU" placeholder="Usuario (sin espacios)" required><input type="text" id="uN" placeholder="Nombre completo" required style="width:240px"><select id="uR"><option>CONSULTA</option><option>PROYECTISTA</option><option>ADMIN</option></select><button class="btn pri" type="submit">Crear usuario</button></form>' +
         '<div class="tabla-caja" style="margin-top:12px"><table class="t"><thead><tr><th style="text-align:left">Usuario</th><th style="text-align:left">Nombre</th><th>Rol</th><th>Activo</th><th>Último acceso</th><th></th></tr></thead><tbody>' +
         l.map(function (u) {
@@ -909,6 +866,10 @@
       var deLaOpcion = p.alternativas.length === 1 || !d.alternativa || d.alternativa === a.id;
       return deLaOpcion && ['REJ', 'PPT', 'MD'].indexOf(d.tipo) !== -1 && /\.(pdf|xlsx|xls|docx)$/i.test(d.nombre);
     });
+    // v1.3: sin memoria, los planos aportan la fecha de la carátula (cajetín)
+    if (!docs.some(function (d) { return d.tipo === 'MD'; })) docs = docs.concat(p.documentos.filter(function (d) {
+      return (p.alternativas.length === 1 || !d.alternativa || d.alternativa === a.id) && ['PLA', 'PLG'].indexOf(d.tipo) !== -1 && /\.pdf$/i.test(d.nombre);
+    }).slice(0, 2));
     if (!docs.length) return Promise.reject(new Error('No hay resumen ejecutivo, presupuesto ni memoria (PDF, Excel o Word) registrados para esta opción. Usa "Actualizar archivos" en Documentos.'));
     var libs = [];
     if (docs.some(function (d) { return /\.pdf$/i.test(d.nombre); })) libs.push(cargarScript(CDN.pdfjs).then(function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = CDN.pdfjsWorker; }));
@@ -935,6 +896,550 @@
       aviso('Lectura terminada.');
       var c = X.combinar(resultados); c.leidos = leidos; return c;
     });
+  }
+
+  // ===================== AÑO DEL PROYECTO (v1.3) =====================
+  /** Propone el año (y las fechas de obra) con lo leído: terminados → fin del cronograma; nuevos → fecha de la carátula. */
+  function sugerenciaAnio(p, V) {
+    var fin = V.finObra, ini = V.inicioObra, car = V.anioCaratula, term = esTerminado(p);
+    if (term && fin) return { anio: fin.valor.slice(0, 4), fuente: fin.fuente, motivo: 'fecha Fin del cronograma', inicio: ini ? ini.valor : '', termino: fin.valor };
+    if (!term && car) return { anio: String(car.valor), fuente: car.fuente, motivo: 'fecha de la carátula', inicio: '', termino: '' };
+    if (fin) return { anio: fin.valor.slice(0, 4), fuente: fin.fuente, motivo: 'fecha Fin del cronograma', inicio: '', termino: '' };
+    if (car) return { anio: String(car.valor), fuente: car.fuente, motivo: 'fecha de la carátula', inicio: '', termino: '' };
+    return null;
+  }
+
+  // ===================== PDF DE LA FICHA (v1.3) =====================
+  function cargarPdfLibs() { return cargarScript(CDN.jspdf).then(function () { return cargarScript(CDN.autotable); }); }
+
+  /** Texto para las fuentes estándar del PDF (solo Latin-1). */
+  function pt(s) {
+    return String(s == null ? '' : s).replace(/[–—]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/…/g, '...').replace(/[^\x00-\xFF]/g, '');
+  }
+
+  function imagenDataUrl(url) {
+    return new Promise(function (ok) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+          var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0);
+          ok({ url: c.toDataURL('image/jpeg', 0.92), w: img.naturalWidth, h: img.naturalHeight });
+        } catch (e) { ok(null); }
+      };
+      img.onerror = function () { ok(null); };
+      img.src = url;
+    });
+  }
+
+  var TESELAS = [
+    { credito: 'Imagen satelital © Esri', url: function (z, x, y) { return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x; } },
+    { credito: 'Mapa © OpenStreetMap', url: function (z, x, y) { return 'https://tile.openstreetmap.org/' + z + '/' + x + '/' + y + '.png'; } }
+  ];
+
+  /** Dibuja las líneas y puntos sobre teselas (satelital; si no se puede, calles; si no, fondo liso). Devuelve {url, credito} o null. */
+  function mapaEstatico(capas, puntos, W, H) {
+    var todos = [];
+    capas.forEach(function (c) { c.p.forEach(function (q) { todos.push(q); }); });
+    puntos.forEach(function (x) { todos.push(x.p); });
+    if (!todos.length) return Promise.resolve(null);
+    var proyectar = function (lat, lon, z) {
+      var s = 256 * Math.pow(2, z), sl = Math.sin(lat * Math.PI / 180);
+      return [(lon + 180) / 360 * s, (0.5 - Math.log((1 + sl) / (1 - sl)) / (4 * Math.PI)) * s];
+    };
+    var z, caja;
+    for (z = 18; z > 3; z--) {
+      var xy = todos.map(function (q) { return proyectar(q[0], q[1], z); });
+      caja = { x0: Math.min.apply(null, xy.map(function (a) { return a[0]; })), x1: Math.max.apply(null, xy.map(function (a) { return a[0]; })),
+        y0: Math.min.apply(null, xy.map(function (a) { return a[1]; })), y1: Math.max.apply(null, xy.map(function (a) { return a[1]; })) };
+      if (caja.x1 - caja.x0 <= W - 120 && caja.y1 - caja.y0 <= H - 120) break;
+    }
+    if (caja.x1 - caja.x0 < 40 && caja.y1 - caja.y0 < 40 && z > 16) {   // un solo punto: no acercar de más
+      var f = Math.pow(2, 16 - z); z = 16;
+      caja = { x0: caja.x0 * f, x1: caja.x1 * f, y0: caja.y0 * f, y1: caja.y1 * f };
+    }
+    var ox = (caja.x0 + caja.x1) / 2 - W / 2, oy = (caja.y0 + caja.y1) / 2 - H / 2, nT = Math.pow(2, z);
+    var lista = [];
+    for (var tx = Math.floor(ox / 256); tx <= Math.floor((ox + W) / 256); tx++)
+      for (var ty = Math.floor(oy / 256); ty <= Math.floor((oy + H) / 256); ty++) if (ty >= 0 && ty < nT) lista.push([tx, ty]);
+    var conFondo = function (fuente) {
+      var c = document.createElement('canvas'); c.width = W; c.height = H;   // un lienzo nuevo por intento
+      var g = c.getContext('2d');
+      return Promise.all(lista.map(function (t) {
+        return new Promise(function (ok, mal) {
+          var img = new Image(); img.crossOrigin = 'anonymous';
+          var reloj = setTimeout(function () { mal(new Error('tiempo')); }, 15000);
+          img.onload = function () { clearTimeout(reloj); ok({ img: img, t: t }); };
+          img.onerror = function () { clearTimeout(reloj); mal(new Error('tesela')); };
+          img.src = fuente.url(z, ((t[0] % nT) + nT) % nT, t[1]);
+        });
+      })).then(function (imgs) {
+        imgs.forEach(function (o) { g.drawImage(o.img, Math.round(o.t[0] * 256 - ox), Math.round(o.t[1] * 256 - oy)); });
+        c.toDataURL('image/jpeg', 0.5);   // lanza error si el servidor no permite exportar la imagen
+        return { c: c, credito: fuente.credito };
+      });
+    };
+    return conFondo(TESELAS[0]).catch(function () { return conFondo(TESELAS[1]); }).catch(function () {
+      var c = document.createElement('canvas'); c.width = W; c.height = H;
+      var g = c.getContext('2d'); g.fillStyle = '#e8e2da'; g.fillRect(0, 0, W, H);
+      return { c: c, credito: 'Sin imagen de fondo (sin conexión con el servidor de mapas)' };
+    }).then(function (r) {
+      var g = r.c.getContext('2d');
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      capas.forEach(function (cp) {
+        g.beginPath(); g.setLineDash(cp.dash || []);
+        cp.p.forEach(function (q, i) { var a = proyectar(q[0], q[1], z); if (i) g.lineTo(a[0] - ox, a[1] - oy); else g.moveTo(a[0] - ox, a[1] - oy); });
+        g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = cp.ancho + 4; g.stroke();
+        g.strokeStyle = cp.color; g.lineWidth = cp.ancho; g.stroke();
+      });
+      g.setLineDash([]);
+      puntos.forEach(function (x) {
+        var a = proyectar(x.p[0], x.p[1], z);
+        g.beginPath(); g.arc(a[0] - ox, a[1] - oy, 9, 0, 2 * Math.PI); g.fillStyle = '#0b3954'; g.fill(); g.lineWidth = 3; g.strokeStyle = '#fff'; g.stroke();
+      });
+      // Escala gráfica
+      var latC = todos.reduce(function (s, q) { return s + q[0]; }, 0) / todos.length;
+      var mpp = 156543.03392 * Math.cos(latC * Math.PI / 180) / Math.pow(2, z);
+      var metros = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000].filter(function (m) { return m / mpp <= W * 0.22; }).pop() || 10;
+      var largo = metros / mpp;
+      g.fillStyle = 'rgba(255,255,255,0.9)'; g.fillRect(14, H - 46, largo + 24, 34);
+      g.fillStyle = '#222'; g.fillRect(26, H - 22, largo, 5);
+      g.font = '600 15px Arial'; g.fillText(metros >= 1000 ? (metros / 1000) + ' km' : metros + ' m', 26, H - 28);
+      // Crédito
+      g.font = '14px Arial';
+      var tw = g.measureText(r.credito).width;
+      g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(W - tw - 22, H - 26, tw + 16, 22);
+      g.fillStyle = '#333'; g.fillText(r.credito, W - tw - 14, H - 10);
+      return { url: r.c.toDataURL('image/jpeg', 0.9), credito: r.credito };
+    });
+  }
+
+  function filasComparacion(p) {
+    var hab = function (v) { return n(v) == null ? '-' : fmtNum(v) + ' hab.'; };
+    return [
+      ['Descripción del trazo', function (a) { return a.descripcion || '-'; }],
+      ['Longitud', function (a) { return n(a.longitud) == null ? '-' : fmtNum(a.longitud) + ' m'; }],
+      ['Longitud medida en la traza', function (a) { return a.longitudTraza ? fmtNum(a.longitudTraza) + ' m' : 'Sin traza'; }],
+      ['Población beneficiada', function (a) { return hab(a.poblacion); }],
+      ['A · Movimiento de tierras', function (a) { return fmtMoneda(a.subA); }],
+      ['B · Suministro e instalación de tubería', function (a) { return fmtMoneda(a.subB); }],
+      ['C · Piezas especiales y válvulas', function (a) { return fmtMoneda(a.subC); }],
+      ['D · Estructuras', function (a) { return fmtMoneda(a.subD); }],
+      ['E · Hincado de tubería', function (a) { return fmtMoneda(a.subE); }],
+      ['Subtotal sin IVA', function (a) { return fmtMoneda(a.sinIva); }],
+      ['IVA 16%', function (a) { return fmtMoneda(a.iva); }],
+      ['Inversión estimada total (con IVA)', function (a) { return fmtMoneda(a.total); }],
+      ['Duración de obra', function (a) { return a.duracion ? fmtNum(a.duracion) + ' días hábiles' : '-'; }]
+    ];
+  }
+
+  function nombreArchivo(base) {
+    return String(base || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  }
+  function hoyIso() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function ahoraTxt() { var d = new Date(); return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+
+  /** Encabezado común de los PDF; devuelve la altura donde sigue el contenido. */
+  function pdfEncabezado(doc, logo, subtitulo, anchoPag) {
+    var M = 16, y = 14;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(154, 74, 0);
+    doc.text(pt('AGUA POTABLE Y ALCANTARILLADO · LAGOS DE MORENO'), M, y + 4);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90, 90, 90);
+    doc.text(pt(subtitulo), M, y + 9);
+    if (logo) { var lh = 13, lw = lh * logo.w / logo.h; doc.addImage(logo.url, 'JPEG', anchoPag - M - lw, y - 1, lw, lh); }
+    y += 15; doc.setDrawColor(255, 130, 0); doc.setLineWidth(0.8); doc.line(M, y, anchoPag - M, y);
+    return y + 6;
+  }
+
+  function pdfPies(doc, anchoPag, altoPag) {
+    var N = doc.getNumberOfPages(), quien = (E.usuario && E.usuario.nombre) || '';
+    for (var i = 1; i <= N; i++) {
+      doc.setPage(i);
+      doc.setDrawColor(227, 221, 214); doc.setLineWidth(0.3); doc.line(16, altoPag - 12, anchoPag - 16, altoPag - 12);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(90, 90, 90);
+      doc.text(pt('Generado el ' + ahoraTxt() + (quien ? ' por ' + quien : '') + ' · Cartera de Proyectos · Agua Potable y Alcantarillado'), 16, altoPag - 8);
+      doc.text('Página ' + i + ' de ' + N, anchoPag - 16, altoPag - 8, { align: 'right' });
+    }
+  }
+
+  var NOTA_INFORMATIVA = 'Documento informativo. Generado desde la app Cartera de Proyectos para consulta. No sustituye al expediente técnico ni a los documentos firmados del proyecto. Las inversiones son estimaciones de preinversión; no son montos contratados ni ejercidos.';
+
+  function notaCabe(doc, y, anchoPag, altoPag, texto) {
+    doc.setFontSize(8.5);
+    return y + doc.splitTextToSize(pt(texto), anchoPag - 32 - 8).length * 3.8 + 6 <= altoPag - 18;
+  }
+
+  /** Imagen de una gráfica con fondo blanco, en JPEG (mucho más ligera que PNG). */
+  function graficaJpg(el) {
+    var c = document.createElement('canvas'); c.width = el.width; c.height = el.height;
+    var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(el, 0, 0);
+    return c.toDataURL('image/jpeg', 0.85);
+  }
+
+  function pdfNota(doc, y, anchoPag, altoPag, texto) {
+    var M = 16, ancho = anchoPag - 2 * M;
+    doc.setFontSize(8.5);
+    var lineas = doc.splitTextToSize(pt(texto), ancho - 8);
+    var alto = lineas.length * 3.8 + 6;
+    if (y + alto > altoPag - 18) { doc.addPage(); y = 18; }
+    doc.setFillColor(250, 246, 241); doc.setDrawColor(214, 207, 199); doc.setLineWidth(0.3);
+    doc.roundedRect(M, y, ancho, alto, 2, 2, 'FD');
+    doc.setTextColor(61, 61, 61); doc.setFont('helvetica', 'normal');
+    doc.text(lineas, M + 4, y + 5);
+    return y + alto + 4;
+  }
+
+  function estiloTabla(extra) {
+    return Object.assign({
+      theme: 'grid', margin: { left: 16, right: 16, bottom: 18 },
+      styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 1.6, lineColor: [227, 221, 214], lineWidth: 0.2, textColor: [43, 43, 43], overflow: 'linebreak' },
+      headStyles: { fillColor: [248, 239, 230], textColor: [154, 74, 0], fontStyle: 'bold', halign: 'center' }
+    }, extra || {});
+  }
+
+  function pdfFicha(p) {
+    var b = $('#fPdf'); if (b) { b.disabled = true; b.textContent = 'Preparando PDF…'; }
+    var listo = function () { if (b) { b.disabled = false; b.innerHTML = ICONO_PDF + 'Descargar PDF'; } };
+    aviso('Preparando el PDF del proyecto…', 30000);
+    var alts = p.alternativas || [], varias = alts.length > 1, capas = [], puntos = [], leyenda = [];
+    var agregar = function (traza, letra) {
+      if (!traza) return;
+      var total = 0, color = '';
+      (traza.lineas || []).forEach(function (l) {
+        if (esMarca(l)) return;
+        var c = l.e ? (l.c || '#3a5bd9') : (letra && varias ? COLOR_OPCION[letra] : (l.c || COLOR_OPCION.A));
+        capas.push({ p: l.p, color: c, ancho: l.e ? 4 : 7, dash: l.e ? [14, 10] : [] });
+        if (!l.e) { total += Number(l.l) || 0; color = color || c; }
+      });
+      (traza.puntos || []).forEach(function (x) { puntos.push(x); });
+      if (total) leyenda.push({ t: (letra && varias ? 'Opción ' + letra : (letra ? 'Traza' : 'Traza común')) + ' · ' + fmtNum(total) + ' m', c: color });
+    };
+    agregar(p.traza, '');
+    alts.forEach(function (a) { agregar(a.traza, a.letra); });
+    if (!capas.length && esParcial(p)) { var col = coloniaDe(p.colonia); if (col) puntos.push({ n: p.colonia, p: [col.lat, col.lng] }); }
+
+    Promise.all([cargarPdfLibs(), imagenDataUrl('logo.jpg'), mapaEstatico(capas, puntos, 1500, 640)]).then(function (r) {
+      var logo = r[1], mapa = r[2];
+      var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'letter' });
+      var AP = 215.9, HP = 279.4, M = 16, ancho = AP - 2 * M;
+      var y = pdfEncabezado(doc, logo, 'Cartera de Proyectos · Ficha del proyecto', AP);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(179, 90, 0);
+      doc.text(pt(p.id + (p.clave ? ' · Documentos ' + p.clave : '') + ' · ' + (p.sistema === 'ALCANTARILLADO' ? 'Alcantarillado' : 'Agua potable') + ' · ' + p.estado + (p.anio ? ' · Año ' + p.anio : '')), M, y);
+      y += 6;
+      doc.setFontSize(14); doc.setTextColor(43, 43, 43);
+      var tit = doc.splitTextToSize(pt(p.nombre), ancho); doc.text(tit, M, y); y += tit.length * 6 + 2;
+
+      var a0 = alts[0] || {};
+      var campos = esParcial(p)
+        ? [['SISTEMA', p.sistema], ['DIÁMETRO', p.diametro ? p.diametro + ' pulg' : ''], ['LONGITUD', n(a0.longitud) != null ? fmtNum(a0.longitud) + ' m' : ''], ['AÑO DE LA OBRA', p.anio],
+          ['COLONIA', p.colonia], ['CALLES / TRAMO', p.calles], ['SUPERFICIE', String(a0.superficie || 'DESCONOCIDA').toLowerCase()], ['¿SE CUENTA CON LA TRAZA?', a0.tieneTraza ? 'Sí' : 'No']]
+        : [['TIPO DE OBRA', p.tipoObra], ['DIÁMETRO', p.diametro ? p.diametro + ' pulg' : ''], ['MATERIAL', p.material], ['FUENTE DE FINANCIAMIENTO', p.fuente],
+          ['COLONIA', p.colonia], ['CALLES / TRAMO', p.calles], ['AÑO DEL PROYECTO', p.anio], ['ESTADO', p.estado]];
+      if (!esParcial(p) && (esTerminado(p) || p.inicio || p.termino)) campos.push(['INICIO DE OBRA', p.inicio ? fmtFecha(p.inicio) : ''], ['TÉRMINO DE OBRA', p.termino ? fmtFecha(p.termino) : ''], ['MONTO EJERCIDO', p.montoEjercido ? fmtMoneda(p.montoEjercido) : '']);
+      var colW = ancho / 4;
+      for (var i = 0; i < campos.length; i += 4) {
+        var fila = campos.slice(i, i + 4), maxL = 1;
+        fila.forEach(function (c, j) {
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(90, 90, 90);
+          doc.text(pt(c[0]), M + j * colW, y);
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(43, 43, 43);
+          var v = doc.splitTextToSize(pt(c[1] || '-'), colW - 3); doc.text(v, M + j * colW, y + 4); maxL = Math.max(maxL, v.length);
+        });
+        y += 4 + maxL * 4 + 3;
+      }
+
+      if (mapa) {
+        // El mapa se ajusta para que la tabla y la nota quepan en la primera página
+        var resto = esParcial(p) ? 45 : 5 + 7 + 13 * 6.3 + 5 + 16;
+        var mh = Math.max(48, Math.min(ancho * 640 / 1500, HP - 18 - y - 9 - resto)), mw = mh * 1500 / 640, mx = M + (ancho - mw) / 2;
+        doc.addImage(mapa.url, 'JPEG', mx, y, mw, mh); doc.setDrawColor(227, 221, 214); doc.setLineWidth(0.3); doc.rect(mx, y, mw, mh);
+        y += mh + 4;
+        var x = mx; doc.setFontSize(8.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(43, 43, 43);
+        leyenda.forEach(function (l) {
+          doc.setDrawColor(l.c); doc.setLineWidth(1.2); doc.line(x, y - 1, x + 7, y - 1);
+          doc.text(pt(l.t), x + 9, y); x += 12 + doc.getTextWidth(pt(l.t)) + 6;
+        });
+        if (leyenda.length) y += 5;
+      } else {
+        doc.setFontSize(9); doc.setTextColor(90, 90, 90); doc.text('Sin traza cargada para mostrar en el mapa.', M, y + 2); y += 7;
+      }
+
+      if (esParcial(p)) {
+        var det = a0.estDetalle || {};
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(43, 43, 43);
+        doc.text('Inversión estimada (referencia, datos parciales)', M, y + 2); y += 8;
+        doc.setFontSize(13); doc.setTextColor(154, 74, 0); doc.text(pt(rangoTxt(a0.estMinTotal, a0.estMaxTotal) + ' con IVA'), M, y); y += 6;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(61, 61, 61);
+        (det.supuestos || []).forEach(function (t) { var ls = doc.splitTextToSize(pt('- ' + t), ancho); doc.text(ls, M, y); y += ls.length * 3.8; });
+        y += 2;
+      } else {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(43, 43, 43);
+        doc.text(varias ? 'Comparación de opciones de trazo' : 'Datos del proyecto', M, y + 2);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(138, 63, 0);
+        doc.text('Estimado paramétrico', AP - M, y + 2, { align: 'right' });
+        y += 5;
+        var cab = ['Concepto'].concat(alts.map(function (a) { return (varias ? 'Opción ' + a.letra : 'Valor') + (p.elegida === a.id ? (esTerminado(p) ? ' (construida)' : ' (elegida)') : ''); }));
+        var cuerpo = filasComparacion(p).map(function (f) { return [pt(f[0])].concat(alts.map(function (a) { return pt(f[1](a)); })); });
+        doc.autoTable(estiloTabla({
+          startY: y, head: [cab], body: cuerpo,
+          columnStyles: { 0: { fontStyle: 'bold', cellWidth: 62 } },
+          didParseCell: function (d) {
+            if (d.section === 'body' && d.column.index > 0) d.cell.styles.halign = d.row.index === 0 ? 'center' : 'right';
+            if (d.section === 'body' && d.row.index === 11) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = [255, 241, 226]; }
+          }
+        }));
+        y = doc.lastAutoTable.finalY + 5;
+      }
+      var notaPendiente = !notaCabe(doc, y, AP, HP, NOTA_INFORMATIVA);
+      if (!notaPendiente) y = pdfNota(doc, y, AP, HP, NOTA_INFORMATIVA);
+
+      // Página de documentos registrados
+      doc.addPage();
+      y = pdfEncabezado(doc, logo, 'Cartera de Proyectos · ' + p.id + ' · Documentos registrados', AP);
+      var docs = p.documentos || [], tipos = (E.cat.listas || {}).tiposDoc || {};
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(43, 43, 43);
+      doc.text(pt('Documentos registrados (' + docs.length + ')'), M, y + 2); y += 5;
+      if (docs.length) {
+        var opc = function (id) { var a = alts.find(function (x) { return x.id === id; }); return a && varias ? a.letra : (varias ? 'Común' : '-'); };
+        doc.autoTable(estiloTabla({
+          startY: y, head: [['Tipo', 'Archivo', 'Opción', 'Rev.', 'Tamaño', 'Fecha']],
+          body: docs.map(function (d) { return [pt(tipos[d.tipo] || d.tipo), pt(d.nombre), opc(d.alternativa), pt(d.revision || ''), fmtTam(d.tamano), fmtFecha(d.fecha)]; }),
+          columnStyles: { 0: { cellWidth: 34, fontStyle: 'bold' }, 2: { halign: 'center', cellWidth: 16 }, 3: { halign: 'center', cellWidth: 12 }, 4: { halign: 'right', cellWidth: 18 }, 5: { halign: 'center', cellWidth: 22 } }
+        }));
+      } else { doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text('Sin documentos registrados.', M, y + 4); }
+      if (notaPendiente) pdfNota(doc, (docs.length ? doc.lastAutoTable.finalY : y + 6) + 6, AP, HP, NOTA_INFORMATIVA);
+
+      pdfPies(doc, AP, HP);
+      doc.save(p.id + '_' + nombreArchivo(p.nombre) + '_' + hoyIso() + '.pdf');
+      aviso('PDF listo' + (mapa && /Esri/.test(mapa.credito) ? '.' : mapa ? ' (' + mapa.credito + ').' : '.'), 5000);
+      listo();
+    }).catch(function (e) { listo(); fallo(e); });
+  }
+
+  // ===================== ANÁLISIS (v1.3) =====================
+  var COLG = { ap: '#1f6fb5', al: '#8a5a2b', apP: 'rgba(31,111,181,0.38)', alP: 'rgba(138,90,43,0.38)', inv: '#E07A10', invP: 'rgba(224,122,16,0.40)', nar: '#B35A00' };
+
+  function aniosDe(ps) {
+    var a = {};
+    ps.forEach(function (p) { var x = Number(p.anio); if (p.anio && isFinite(x)) a[x] = true; });
+    return Object.keys(a).map(Number).sort(function (x, y) { return x - y; });
+  }
+
+  /** Agrupa la cartera filtrada por año. Las obras con datos parciales cuentan en obras y km, no en la inversión. */
+  function datosAnalisis() {
+    var f = E.filtrosAn;
+    var ps = E.cat.proyectos.filter(function (p) { return p.estado !== 'CANCELADO'; });
+    if (f.sistema) ps = ps.filter(function (p) { return p.sistema === f.sistema; });
+    if (f.incluir === 'NUEVOS') ps = ps.filter(function (p) { return !esTerminado(p); });
+    if (f.incluir === 'TERMINADOS') ps = ps.filter(esTerminado);
+    var desde = Number(f.desde) || -Infinity, hasta = Number(f.hasta) || Infinity;
+    ps = ps.filter(function (p) { var a = Number(p.anio); return !p.anio || !isFinite(a) || (a >= desde && a <= hasta); });
+    var items = ps.map(function (p) {
+      var a = altRep(p), m = n(a.longitud) || n(a.longitudTraza) || 0;
+      return { p: p, anio: p.anio && isFinite(Number(p.anio)) ? String(Number(p.anio)) : 'Sin año', m: m, inv: esParcial(p) ? 0 : (n(a.total) || 0),
+        pob: n(a.poblacion) || 0, prop: !esTerminado(p), ap: p.sistema !== 'ALCANTARILLADO' };
+    });
+    var anios = aniosDe(ps).map(String);
+    if (items.some(function (x) { return x.anio === 'Sin año'; })) anios.push('Sin año');
+    var suma = function (l, k) { return l.reduce(function (s, x) { return s + x[k]; }, 0); };
+    var resumen = function (l, etq) {
+      var conInv = l.filter(function (x) { return x.inv > 0 && x.m > 0; });
+      var mInv = suma(conInv, 'm');
+      return { anio: etq, obras: l.length, term: l.filter(function (x) { return !x.prop; }).length,
+        kmAP: suma(l.filter(function (x) { return x.ap; }), 'm') / 1000, kmAL: suma(l.filter(function (x) { return !x.ap; }), 'm') / 1000,
+        km: suma(l, 'm') / 1000, inv: suma(l, 'inv'), pob: suma(l, 'pob'), pm: mInv ? suma(conInv, 'inv') / mInv : null };
+    };
+    var porAnio = anios.map(function (y) {
+      var l = items.filter(function (x) { return x.anio === y; });
+      var r = resumen(l, y);
+      ['ap', 'al'].forEach(function (s) {
+        [false, true].forEach(function (pr) {
+          r['km_' + s + (pr ? 'P' : '')] = suma(l.filter(function (x) { return (s === 'ap') === x.ap && x.prop === pr; }), 'm') / 1000;
+        });
+      });
+      r.invC = suma(l.filter(function (x) { return !x.prop; }), 'inv'); r.invP = suma(l.filter(function (x) { return x.prop; }), 'inv');
+      return r;
+    });
+    var total = resumen(items, 'Total');
+    var nuevos = items.filter(function (x) { return x.prop; });
+    var estados = E.cat.listas.estados.filter(function (e) { return e !== 'TERMINADO' && e !== 'CANCELADO'; }).map(function (e) {
+      var l = nuevos.filter(function (x) { return x.p.estado === e; });
+      return { estado: e, n: l.length, inv: suma(l, 'inv') };
+    });
+    var dg = {};
+    items.forEach(function (x) { var d = String(x.p.diametro || '').trim() || 'Sin dato'; dg[d] = (dg[d] || 0) + x.m / 1000; });
+    var diams = Object.keys(dg).map(function (d) { return { d: d, km: dg[d] }; }).sort(function (a, b) { return (Number(a.d) || 999) - (Number(b.d) || 999); });
+    var ac = 0, acumulado = porAnio.filter(function (r) { return r.anio !== 'Sin año'; }).map(function (r) { ac += r.km_ap + r.km_al; return { anio: r.anio, km: ac }; });
+    return { items: items, anios: anios, porAnio: porAnio, total: total, estados: estados, diams: diams, acumulado: acumulado,
+      kmC: items.filter(function (x) { return !x.prop; }).reduce(function (s, x) { return s + x.m; }, 0) / 1000,
+      kmP: nuevos.reduce(function (s, x) { return s + x.m; }, 0) / 1000, nNuevos: nuevos.length };
+  }
+
+  function vistaAnalisis() {
+    var todos = aniosDe(E.cat.proyectos.filter(function (p) { return p.estado !== 'CANCELADO'; }));
+    var f = E.filtrosAn, L = E.cat.listas;
+    var opAnio = function (sel, vacio) { return '<option value="">' + vacio + '</option>' + todos.map(function (a) { return '<option' + (String(sel) === String(a) ? ' selected' : '') + '>' + a + '</option>'; }).join(''); };
+    marco('<section class="fila entre" style="align-items:flex-end"><div><h1 class="titulo">Análisis de la cartera por año</h1>' +
+      '<p class="muted" style="margin:4px 0 0">Año del proyecto: fin del cronograma (terminados), fecha de la propuesta (nuevos) o año de la obra (datos parciales).</p></div>' +
+      '<div class="fila"><button class="btn" id="anXls">Descargar Excel</button><button class="btn pri" id="anPdf">PDF del análisis</button></div></section>' +
+      '<section class="fila filtros">' +
+      '<label class="col"><span class="etq">DESDE</span><select id="anDe">' + opAnio(f.desde, 'Todos') + '</select></label>' +
+      '<label class="col"><span class="etq">HASTA</span><select id="anA">' + opAnio(f.hasta, 'Todos') + '</select></label>' +
+      '<label class="col"><span class="etq">SISTEMA</span><select id="anSis"><option value="">Todos</option>' + L.sistemas.map(function (s) { return '<option' + (f.sistema === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></label>' +
+      '<label class="col"><span class="etq">INCLUIR</span><select id="anInc"><option value="">Nuevos y terminados</option><option value="NUEVOS"' + (f.incluir === 'NUEVOS' ? ' selected' : '') + '>Solo nuevos</option><option value="TERMINADOS"' + (f.incluir === 'TERMINADOS' ? ' selected' : '') + '>Solo terminados</option></select></label>' +
+      '</section>' +
+      '<section class="grid-kpi" id="anKpi"></section>' +
+      '<section class="graficas">' +
+      '<div class="tarjeta"><h2>Kilómetros por año</h2><p class="muted" style="margin:-4px 0 10px">Tono fuerte: construido · tono claro: propuesto</p><div class="graf"><canvas id="gKm" aria-label="Kilómetros por año" role="img"></canvas></div></div>' +
+      '<div class="tarjeta"><h2>Inversión estimada por año</h2><p class="muted" style="margin:-4px 0 10px">Millones de pesos con IVA · estimado paramétrico</p><div class="graf"><canvas id="gInv" aria-label="Inversión estimada por año" role="img"></canvas></div></div>' +
+      '<div class="tarjeta"><h2>Cartera de proyectos nuevos por estado</h2><p class="muted" style="margin:-4px 0 10px">Número de proyectos e inversión estimada</p><div class="graf"><canvas id="gEst" aria-label="Proyectos nuevos por estado" role="img"></canvas></div></div>' +
+      '<div class="tarjeta"><h2>Kilómetros por diámetro</h2><p class="muted" style="margin:-4px 0 10px">Construido y propuesto en el periodo</p><div class="graf"><canvas id="gDia" aria-label="Kilómetros por diámetro" role="img"></canvas></div></div>' +
+      '<div class="tarjeta graf-ancha"><h2>Red acumulada (km construidos)</h2><p class="muted" style="margin:-4px 0 10px">Kilómetros construidos sumados año con año</p><div class="graf"><canvas id="gAcu" aria-label="Red acumulada" role="img"></canvas></div></div>' +
+      '</section>' +
+      '<section class="tarjeta"><h2>Resumen por año</h2><div class="tabla-caja" id="anTabla"></div>' +
+      '<p class="muted" style="margin:10px 0 0">Montos en pesos de cada año (sin actualizar por inflación). Estimaciones de preinversión; no son montos contratados ni ejercidos. Las obras con datos parciales cuentan en obras y km, no en la inversión. Los cancelados no se incluyen.</p></section>' +
+      avisoGeneral());
+    var cambiar = function (k, id) { $(id).onchange = function () { E.filtrosAn[k] = this.value; pintarAnalisis(); }; };
+    cambiar('desde', '#anDe'); cambiar('hasta', '#anA'); cambiar('sistema', '#anSis'); cambiar('incluir', '#anInc');
+    $('#anXls').onclick = excelAnalisis;
+    $('#anPdf').onclick = pdfAnalisis;
+    pintarAnalisis();
+  }
+
+  function pintarAnalisis() {
+    var D = datosAnalisis(); E.analisis = D;
+    var t = D.total;
+    $('#anKpi').innerHTML =
+      kpi('Proyectos en el periodo', fmtNum(t.obras), t.term + ' terminados · ' + D.nNuevos + ' nuevos') +
+      kpi('Km construidos', fmtNum(D.kmC, 2), 'Agua potable y alcantarillado') +
+      kpi('Km propuestos', fmtNum(D.kmP, 2), 'Proyectos nuevos') +
+      kpi('Inversión estimada', fmtMillones(t.inv), 'Estimado paramétrico, con IVA') +
+      kpi('Costo promedio', t.pm ? fmtMoneda(t.pm).replace(/\.\d\d$/, '') + ' /m' : '—', 'Inversión entre metros') +
+      kpi('Población beneficiada', fmtNum(t.pob), 'Suma de los proyectos');
+    var fila = function (r, tot) {
+      return '<tr' + (tot ? ' style="font-weight:700;background:#faf6f1"' : '') + '><td>' + h(r.anio) + '</td><td class="n">' + r.obras + '</td><td class="n">' + fmtNum(r.kmAP, 2) + '</td><td class="n">' + fmtNum(r.kmAL, 2) + '</td><td class="n">' + fmtNum(r.km, 2) +
+        '</td><td class="n">' + fmtMoneda(r.inv) + '</td><td class="n">' + fmtNum(r.pob) + '</td><td class="n">' + (r.pm ? fmtMoneda(r.pm) : '—') + '</td></tr>';
+    };
+    $('#anTabla').innerHTML = D.items.length
+      ? '<table class="t"><thead><tr><th style="text-align:left">Año</th><th>Obras</th><th>Km agua potable</th><th>Km alcantarillado</th><th>Km total</th><th>Inversión estimada</th><th>Población beneficiada</th><th>$/m promedio</th></tr></thead><tbody>' +
+        D.porAnio.map(function (r) { return fila(r); }).join('') + fila(D.total, true) + '</tbody></table>'
+      : '<p class="muted">No hay proyectos con estos filtros.</p>';
+    cargarScript(CDN.chart).then(function () { dibujarGraficas(D); }).catch(fallo);
+  }
+
+  function dibujarGraficas(D) {
+    var C = window.Chart;
+    (E.graficas || []).forEach(function (g) { try { g.destroy(); } catch (e) {} });
+    E.graficas = [];
+    C.defaults.font.family = 'Inter, system-ui, sans-serif'; C.defaults.color = '#3d3d3d';
+    var base = function (extra) {
+      return Object.assign({ responsive: true, maintainAspectRatio: false, animation: false, devicePixelRatio: 2,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } }, extra || {});
+    };
+    var nueva = function (id, cfg) { var el = document.getElementById(id); if (el) E.graficas.push(new C(el, cfg)); };
+    var km = function (v) { return fmtNum(v, 2) + ' km'; };
+    var lab = D.anios;
+    nueva('gKm', { type: 'bar', data: { labels: lab, datasets: [
+      { label: 'Agua potable · construido', data: D.porAnio.map(function (r) { return r.km_ap; }), backgroundColor: COLG.ap, stack: 'k' },
+      { label: 'Alcantarillado · construido', data: D.porAnio.map(function (r) { return r.km_al; }), backgroundColor: COLG.al, stack: 'k' },
+      { label: 'Agua potable · propuesto', data: D.porAnio.map(function (r) { return r.km_apP; }), backgroundColor: COLG.apP, stack: 'k' },
+      { label: 'Alcantarillado · propuesto', data: D.porAnio.map(function (r) { return r.km_alP; }), backgroundColor: COLG.alP, stack: 'k' }] },
+      options: base({ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, title: { display: true, text: 'km' } } },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + km(c.parsed.y); } } } } }) });
+    nueva('gInv', { type: 'bar', data: { labels: lab, datasets: [
+      { label: 'Construido', data: D.porAnio.map(function (r) { return r.invC / 1e6; }), backgroundColor: COLG.inv, stack: 'i' },
+      { label: 'Propuesto', data: D.porAnio.map(function (r) { return r.invP / 1e6; }), backgroundColor: COLG.invP, stack: 'i' }] },
+      options: base({ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, title: { display: true, text: 'millones de pesos' } } },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + fmtMillones(c.parsed.y * 1e6); } } } } }) });
+    nueva('gEst', { type: 'bar', data: { labels: D.estados.map(function (e) { return e.estado.charAt(0) + e.estado.slice(1).toLowerCase() + ' · ' + (e.inv ? fmtMillones(e.inv) : '—'); }),
+      datasets: [{ label: 'Proyectos', data: D.estados.map(function (e) { return e.n; }), backgroundColor: COLG.nar, borderRadius: 4 }] },
+      options: base({ indexAxis: 'y', scales: { x: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'proyectos' } } }, plugins: { legend: { display: false } } }) });
+    nueva('gDia', { type: 'bar', data: { labels: D.diams.map(function (d) { return isFinite(Number(d.d)) ? d.d + '"' : d.d; }),
+      datasets: [{ label: 'km', data: D.diams.map(function (d) { return d.km; }), backgroundColor: COLG.ap, borderRadius: 4 }] },
+      options: base({ indexAxis: 'y', scales: { x: { beginAtZero: true, title: { display: true, text: 'km' } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return km(c.parsed.x); } } } } }) });
+    nueva('gAcu', { type: 'line', data: { labels: D.acumulado.map(function (r) { return r.anio; }),
+      datasets: [{ label: 'km construidos acumulados', data: D.acumulado.map(function (r) { return r.km; }), borderColor: '#9A4A00', backgroundColor: 'rgba(255,130,0,0.15)', fill: true, tension: 0, pointRadius: 4 }] },
+      options: base({ scales: { y: { beginAtZero: true, title: { display: true, text: 'km' } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return km(c.parsed.y); } } } } }) });
+  }
+
+  function filtrosTxt() {
+    var f = E.filtrosAn;
+    return 'Años: ' + (f.desde || 'todos') + ' a ' + (f.hasta || 'todos') + ' · Sistema: ' + (f.sistema || 'todos') + ' · ' + (f.incluir === 'NUEVOS' ? 'solo nuevos' : f.incluir === 'TERMINADOS' ? 'solo terminados' : 'nuevos y terminados');
+  }
+
+  function excelAnalisis() {
+    var D = E.analisis; if (!D) return;
+    cargarScript(CDN.xlsx).then(function () {
+      var X = window.XLSX, r2 = function (v) { return Math.round(v * 100) / 100; };
+      var res = [['Análisis de la cartera por año'], [filtrosTxt()], [],
+        ['Año', 'Obras', 'Km agua potable', 'Km alcantarillado', 'Km total', 'Inversión estimada ($, con IVA)', 'Población beneficiada', '$/m promedio']];
+      D.porAnio.concat([D.total]).forEach(function (r) { res.push([r.anio, r.obras, r2(r.kmAP), r2(r.kmAL), r2(r.km), r2(r.inv), r.pob, r.pm ? r2(r.pm) : '']); });
+      res.push([], ['Estimaciones de preinversión; no son montos contratados ni ejercidos. Las obras con datos parciales cuentan en obras y km, no en la inversión.']);
+      var det = [['Clave', 'Nombre', 'Sistema', 'Estado', 'Información', 'Año', 'Diámetro (pulg)', 'Longitud (m)', 'Inversión estimada ($, con IVA)', 'Población beneficiada']];
+      D.items.forEach(function (x) { det.push([x.p.id, x.p.nombre, x.p.sistema, x.p.estado, x.p.informacion, x.anio, x.p.diametro || '', r2(x.m), x.inv ? r2(x.inv) : '', x.pob || '']); });
+      var wb = X.utils.book_new();
+      var h1 = X.utils.aoa_to_sheet(res); h1['!cols'] = [{ wch: 10 }, { wch: 8 }, { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 28 }, { wch: 20 }, { wch: 14 }];
+      var h2 = X.utils.aoa_to_sheet(det); h2['!cols'] = [{ wch: 9 }, { wch: 60 }, { wch: 16 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 26 }, { wch: 20 }];
+      X.utils.book_append_sheet(wb, h1, 'Resumen por año');
+      X.utils.book_append_sheet(wb, h2, 'Proyectos');
+      X.writeFile(wb, 'Analisis_cartera_' + hoyIso() + '.xlsx');
+    }).catch(fallo);
+  }
+
+  function pdfAnalisis() {
+    var D = E.analisis; if (!D) return;
+    aviso('Preparando el PDF del análisis…', 20000);
+    Promise.all([cargarPdfLibs(), imagenDataUrl('logo.jpg')]).then(function (r) {
+      var logo = r[1];
+      var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'letter', orientation: 'landscape' });
+      var AP = 279.4, HP = 215.9, M = 16, ancho = AP - 2 * M;
+      var y = pdfEncabezado(doc, logo, 'Cartera de Proyectos · Análisis por año', AP);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(43, 43, 43);
+      doc.text(pt('Análisis de la cartera por año'), M, y + 1);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(90, 90, 90);
+      doc.text(pt(filtrosTxt()), M, y + 6); y += 10;
+      var t = D.total, kp = [['Proyectos', fmtNum(t.obras)], ['Km construidos', fmtNum(D.kmC, 2)], ['Km propuestos', fmtNum(D.kmP, 2)],
+        ['Inversión estimada', fmtMillones(t.inv)], ['Costo promedio', t.pm ? fmtMoneda(t.pm).replace(/\.\d\d$/, '') + ' /m' : '-'], ['Población beneficiada', fmtNum(t.pob)]];
+      var kw = (ancho - 5 * 4) / 6;
+      kp.forEach(function (k, i) {
+        var x = M + i * (kw + 4);
+        doc.setFillColor(255, 255, 255); doc.setDrawColor(227, 221, 214); doc.setLineWidth(0.3); doc.roundedRect(x, y, kw, 15, 2, 2, 'FD');
+        doc.setFontSize(7.5); doc.setTextColor(90, 90, 90); doc.text(pt(k[0]), x + 3, y + 5);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(154, 74, 0); doc.text(pt(k[1]), x + 3, y + 12); doc.setFont('helvetica', 'normal');
+      });
+      y += 20;
+      var graf = [['gKm', 'Kilómetros por año'], ['gInv', 'Inversión estimada por año (millones, con IVA)'], ['gEst', 'Proyectos nuevos por estado'], ['gDia', 'Kilómetros por diámetro']];
+      var gw = (ancho - 8) / 2, gh = 62;
+      graf.forEach(function (g, i) {
+        var el = document.getElementById(g[0]); if (!el) return;
+        var x = M + (i % 2) * (gw + 8), yy = y + Math.floor(i / 2) * (gh + 10);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(43, 43, 43); doc.text(pt(g[1]), x, yy);
+        var rel = el.height / el.width, hh = Math.min(gh, gw * rel), ww = hh / rel;
+        doc.addImage(graficaJpg(el), 'JPEG', x, yy + 2, ww, hh);
+      });
+      doc.addPage();
+      y = pdfEncabezado(doc, logo, 'Cartera de Proyectos · Análisis por año', AP);
+      var ac = document.getElementById('gAcu');
+      if (ac && D.acumulado.length) {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(43, 43, 43); doc.text('Red acumulada (km construidos)', M, y + 1);
+        var rel2 = ac.height / ac.width, w2 = Math.min(ancho, 55 / rel2);
+        doc.addImage(graficaJpg(ac), 'JPEG', M, y + 3, w2, w2 * rel2); y += w2 * rel2 + 8;
+      }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text('Resumen por año', M, y + 1); y += 4;
+      doc.autoTable(estiloTabla({
+        startY: y, head: [['Año', 'Obras', 'Km agua potable', 'Km alcantarillado', 'Km total', 'Inversión estimada', 'Población beneficiada', '$/m promedio']],
+        body: D.porAnio.concat([D.total]).map(function (r) { return [pt(r.anio), r.obras, fmtNum(r.kmAP, 2), fmtNum(r.kmAL, 2), fmtNum(r.km, 2), fmtMoneda(r.inv), fmtNum(r.pob), r.pm ? fmtMoneda(r.pm) : '-']; }),
+        didParseCell: function (d) {
+          if (d.section === 'body' && d.column.index > 0) d.cell.styles.halign = 'right';
+          if (d.section === 'body' && d.row.index === D.porAnio.length) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = [250, 246, 241]; }
+        }
+      }));
+      y = doc.lastAutoTable.finalY + 5;
+      pdfNota(doc, y, AP, HP, 'Documento informativo. Montos en pesos de cada año (sin actualizar por inflación). Estimaciones de preinversión; no son montos contratados ni ejercidos. Las obras con datos parciales cuentan en obras y km, no en la inversión. Los proyectos cancelados no se incluyen.');
+      pdfPies(doc, AP, HP);
+      doc.save('Analisis_cartera_' + hoyIso() + '.pdf');
+      aviso('PDF listo.');
+    }).catch(fallo);
   }
 
   // ===================== MODAL =====================

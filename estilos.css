@@ -100,9 +100,6 @@ table.mini td:nth-child(2),table.mini td:nth-child(3){text-align:right;white-spa
 .datos{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px 18px}
 .dato{display:flex;flex-direction:column;gap:2px}
 fieldset.caja{border:1px solid var(--borde);border-radius:10px;padding:12px 14px;margin:0}
-.lista-check{max-height:320px;overflow:auto;display:flex;flex-direction:column}
-.lista-check label{flex-wrap:nowrap !important;align-items:flex-start !important;padding:4px 0}
-.lista-check input{margin-top:3px;flex:none}
 
 /* Mapas */
 .mapa{height:520px;width:100%;background:#e8e2da}
@@ -113,9 +110,6 @@ fieldset.caja{border:1px solid var(--borde);border-radius:10px;padding:12px 14px
 .leyenda i.continua{background:#555}
 .leaflet-popup-content{font-family:Inter,sans-serif;font-size:13px}
 
-/* Video */
-.video{position:relative;width:100%;padding-top:56.25%;background:#111;border-radius:10px;overflow:hidden}
-.video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 
 /* Login */
 .login{max-width:400px;margin:60px auto;padding:0 16px}
@@ -174,3 +168,13 @@ table.precios input,table.precios select{height:36px}
 /* v1.1.1: longitudes en la pestaña Traza */
 .long-linea{margin:6px 0 0;font-size:14px}
 .long-total{margin-top:16px;background:#faf6f1;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:4px;font-size:15px}
+
+/* v1.3: PDF de la ficha, año del proyecto y análisis */
+.grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.graficas{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:16px}
+.graf{position:relative;height:300px}
+.graf-ancha{grid-column:1/-1}
+.graf-ancha .graf{height:260px}
+table.t td.n{text-align:right;white-space:nowrap}
+.leido-anio{background:#fff;border:1px solid #e0b25c;border-radius:8px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px}
+.btn svg{flex:none}
