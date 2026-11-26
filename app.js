@@ -248,6 +248,8 @@
     var ps = E.cat.proyectos;
     var nuevos = ps.filter(function (p) { return !esTerminado(p) && p.estado !== 'CANCELADO'; }), term = ps.filter(esTerminado);
     var termC = term.filter(function (p) { return !esParcial(p); }), termP = term.filter(esParcial);
+    var conPob = nuevos.concat(term).filter(function (p) { return n(altRep(p).poblacion) > 0; }).length;
+    var pob = nuevos.concat(term).reduce(function (a, p) { return a + (n(altRep(p).poblacion) || 0); }, 0);
     var suma = function (l, fn) { return l.reduce(function (a, p) { return a + (n(fn(p)) || 0); }, 0); };
     var kmN = suma(nuevos, function (p) { return altRep(p).longitud; }) / 1000, kmT = suma(term, function (p) { return altRep(p).longitud; }) / 1000;
     var invN = suma(nuevos, function (p) { return altRep(p).total; }), invT = suma(termC, function (p) { return altRep(p).total; });
@@ -260,12 +262,13 @@
       '</section><section class="grid3">' +
       kpi('Inversión estimada — proyectos nuevos', fmtMillones(invN), '🟠 Estimado paramétrico, con IVA') +
       kpi('Inversión estimada — obras terminadas', fmtMillones(invT), '🟠 Estimado paramétrico, con IVA') +
-      kpi('Inversión de referencia — datos parciales', termP.length ? rangoMillones(refMin, refMax) : '—', '⚪ Rango con IVA') +
+      (termP.length ? kpi('Inversión de referencia — datos parciales', rangoMillones(refMin, refMax), '⚪ Rango con IVA')
+        : kpi('Población beneficiada', fmtNum(pob), conPob + ' de ' + (nuevos.length + term.length) + ' proyectos con este dato')) +
       '</section><p class="muted" style="margin:-6px 0 0">Estimaciones de preinversión; no son montos contratados ni ejercidos. Las cifras de cada tipo no se suman entre sí.</p>' +
       barraFiltros('todos') +
       '<section class="tarjeta" style="padding:0;overflow:hidden"><div id="mapaInicio" class="mapa grande"></div>' +
       '<div class="leyenda"><span><i style="background:' + COLOR_SISTEMA['AGUA POTABLE'] + '"></i>Agua potable</span><span><i style="background:' + COLOR_SISTEMA.ALCANTARILLADO + '"></i>Alcantarillado</span>' +
-      '<span><i class="punteada"></i>Nuevo (punteado)</span><span><i class="continua"></i>Terminado (continuo)</span><span><b class="pt"></b>Obra sin traza (centro de su colonia)</span><span class="muted">Toca una línea o punto para ver el proyecto.</span></div></section>' +
+      '<span><i class="punteada"></i>Nuevo (punteado)</span><span><i class="continua"></i>Terminado (continuo)</span><span><b class="pt"></b>Obra terminada sin traza (centro de su colonia)</span><span class="muted">Toca una línea o punto para ver el proyecto.</span></div></section>' +
       '<div id="sinTraza"></div>' + avisoGeneral());
     enlazarFiltros(function (soloTexto) { if (soloTexto) pintarMapaInicio(); else vistaInicio(); });
     pintarMapaInicio();
@@ -293,7 +296,7 @@
             capa.addLayer(linea); dibujo = true;
           });
         });
-        if (!dibujo && esParcial(p)) {
+        if (!dibujo && (esParcial(p) || esTerminado(p))) {   // terminados sin KMZ: punto en el centro de su colonia
           var c = coloniaDe(p.colonia);
           if (c) { L.circleMarker([c.lat, c.lng], { radius: 8, color: '#fff', weight: 2, fillColor: COLOR_SISTEMA[p.sistema] || '#555', fillOpacity: 0.95 }).bindPopup(popup(altRep(p))).addTo(capa); dibujo = true; }
         }
@@ -301,7 +304,7 @@
       });
       capa.addTo(m); m._capaProy = capa;
       if (capa.getLayers().length) m.fitBounds(capa.getBounds(), { padding: [30, 30], maxZoom: 16, animate: false });
-      $('#sinTraza').innerHTML = sin.length ? '<section class="tarjeta"><h3>Sin ubicación en el mapa (' + sin.length + ')</h3><p class="muted">Proyectos sin traza cargada u obras con datos parciales sin colonia reconocida. Para la traza, deja el KMZ en su carpeta de Drive y usa "Actualizar archivos" en la ficha.</p><div class="fila">' +
+      $('#sinTraza').innerHTML = sin.length ? '<section class="tarjeta"><h3>Sin ubicación en el mapa (' + sin.length + ')</h3><p class="muted">Proyectos nuevos sin traza cargada u obras terminadas sin traza y sin colonia reconocida (elige la colonia de la lista en Editar datos). Para la traza, deja el KMZ en su carpeta de Drive y usa "Actualizar archivos" en la ficha.</p><div class="fila">' +
         sin.map(function (p) { return '<button class="btn chico" data-abrir="' + h(p.id) + '">' + h(p.id) + ' · ' + h(p.nombre) + '</button>'; }).join('') + '</div></section>' : '';
       enlazarAbrir();
     }).catch(fallo);
@@ -421,7 +424,7 @@
       ['IVA 16%', function (a) { return fmtMoneda(a.iva); }],
       ['Inversión estimada total (con IVA)', function (a) { return '<b>' + fmtMoneda(a.total) + '</b>'; }],
       ['Duración de obra', function (a) { return a.duracion ? fmtNum(a.duracion) + ' días hábiles' : '—'; }]
-    ];
+    ].filter(function (f) { return term || f[0] !== 'Duración de obra'; });   // los nuevos son propuestas: sin duración
     var marca = function (a) { return p.elegida === a.id ? '<span class="chip ok">' + (term ? 'Construida' : 'Elegida') + '</span>' : ''; };
     html += '<section class="tarjeta"><div class="fila entre"><h2 style="margin:0">' + (alts.length > 1 ? 'Comparación de opciones de trazo' : 'Datos del proyecto') + '</h2>' +
       (editar ? '<button class="btn chico" id="bAddAlt">+ Agregar opción</button>' : '') + '</div>' +
@@ -586,7 +589,7 @@
       '<label class="col"><span class="etq">DIÁMETRO (PULG)</span><input type="text" id="pDia" value="' + h(p.diametro || '') + '" inputmode="decimal"></label>' +
       '<label class="col"><span class="etq">MATERIAL</span><input type="text" id="pMat" value="' + h(p.material || '') + '" placeholder="Ej. PVC RD-25"></label>' +
       '<label class="col"><span class="etq">AÑO DEL PROYECTO</span><input type="number" id="pAnio" min="1990" max="2100" step="1" value="' + h(p.anio || '') + '"><span class="muted">' + (term ? 'Año de la fecha Fin del cronograma.' : 'Año de la fecha de la propuesta (carátula).') + ' Se puede leer de los documentos.</span></label>' +
-      '<label class="col"><span class="etq">COLONIA</span><input type="text" id="pCol" value="' + h(p.colonia || '') + '"></label>' +
+      '<label class="col"><span class="etq">COLONIA</span><input type="text" id="pCol" list="dlColP" value="' + h(p.colonia || '') + '"><datalist id="dlColP">' + (E.cat.colonias || []).map(function (c) { return '<option value="' + h(c.n) + '">'; }).join('') + '</datalist></label>' +
       '<label class="col"><span class="etq">CALLES / TRAMO</span><input type="text" id="pCal" value="' + h(p.calles || '') + '"></label>' +
       (term || p.inicio ? '<label class="col"><span class="etq">INICIO DE OBRA</span><input type="date" id="pIni" value="' + h(p.inicio || '') + '"></label>' : '') +
       (term || p.termino ? '<label class="col"><span class="etq">TÉRMINO DE OBRA</span><input type="date" id="pTer" value="' + h(p.termino || '') + '"></label>' : '') +
@@ -1033,7 +1036,7 @@
       ['IVA 16%', function (a) { return fmtMoneda(a.iva); }],
       ['Inversión estimada total (con IVA)', function (a) { return fmtMoneda(a.total); }],
       ['Duración de obra', function (a) { return a.duracion ? fmtNum(a.duracion) + ' días hábiles' : '-'; }]
-    ];
+    ].filter(function (f) { return esTerminado(p) || f[0] !== 'Duración de obra'; });
   }
 
   function nombreArchivo(base) {
@@ -1119,7 +1122,7 @@
     };
     agregar(p.traza, '');
     alts.forEach(function (a) { agregar(a.traza, a.letra); });
-    if (!capas.length && esParcial(p)) { var col = coloniaDe(p.colonia); if (col) puntos.push({ n: p.colonia, p: [col.lat, col.lng] }); }
+    if (!capas.length && (esParcial(p) || esTerminado(p))) { var col = coloniaDe(p.colonia); if (col) puntos.push({ n: p.colonia, p: [col.lat, col.lng] }); }
 
     Promise.all([cargarPdfLibs(), imagenDataUrl('logo.jpg'), mapaEstatico(capas, puntos, 1500, 640)]).then(function (r) {
       var logo = r[1], mapa = r[2];
